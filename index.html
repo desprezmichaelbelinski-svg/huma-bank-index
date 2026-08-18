@@ -782,13 +782,17 @@ function renderAuthLogin(){
     </div>
   </div>`;
 }
+function logSecurity(accountNumber,userName,action,result){
+  sb.from('security_log').insert({id:genId('SEC'), account_number:accountNumber||null, user_name:userName||'Inconnu', action, device:navigator.userAgent.slice(0,60), result});
+}
 function doLogin(){
   const num = document.getElementById('l-num').value.trim();
   const pass = document.getElementById('l-pass').value;
   const acc = ACCOUNTS[num];
-  if(!acc){ auth.loginErr='Numéro de compte introuvable.'; renderRoot(); return; }
-  if(acc.status==='suspended'){ auth.loginErr='Ce compte est suspendu. Contactez l’administration.'; renderRoot(); return; }
-  if(acc.password && acc.password!==pass){ auth.loginErr='Mot de passe incorrect.'; renderRoot(); return; }
+  if(!acc){ auth.loginErr='Numéro de compte introuvable.'; logSecurity(num,null,'Tentative de connexion — compte introuvable','fail'); renderRoot(); return; }
+  if(acc.status==='suspended'){ auth.loginErr='Ce compte est suspendu. Contactez l’administration.'; logSecurity(num,acc.name,'Tentative de connexion — compte suspendu','fail'); renderRoot(); return; }
+  if(acc.password && acc.password!==pass){ auth.loginErr='Mot de passe incorrect.'; logSecurity(num,acc.name,'Mot de passe incorrect','fail'); renderRoot(); return; }
+  logSecurity(num,acc.name,'Connexion réussie','ok');
   loginAs(num);
 }
 function loginAs(number){

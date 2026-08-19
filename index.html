@@ -527,6 +527,8 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 ========================================================= */
 const ACCOUNTS = {}; // number -> account object
 const RECHARGE_REQUESTS = [];
+const CAFETERIA_MENU_TODAY = [];
+let cafCart = {}; // productId -> qty
 const WITHDRAW_REQUESTS = [];
 const CLASSES = ['7e Année Fondamentale','8e Année Fondamentale','9e Année Fondamentale','Secondaire I (NS1)','Secondaire II (NS2)','Secondaire III (NS3)','Secondaire IV — Philo'];
 const AV_PALETTE = ['#2748A0','#8B5FBF','#1B8F5A','#C4433F','#B8860B','#0C7C8C'];
@@ -551,19 +553,26 @@ async function createAccount({nom,prenom,genre,password,role,classe}){
 // Charge toutes les données depuis Supabase (comptes, cartes, transactions,
 // notifications, demandes) dans le même format que l'ancien cache local.
 async function loadFromSupabase(){
-  const [accRes, cardRes, txRes, notifRes, rcRes, wdRes] = await Promise.all([
+  const [accRes, cardRes, txRes, notifRes, rcRes, wdRes, prodRes, menuRes] = await Promise.all([
     sb.from('accounts').select('*'),
     sb.from('cards').select('*'),
     sb.from('transactions').select('*').order('created_at',{ascending:false}),
     sb.from('notifications').select('*').order('created_at',{ascending:false}),
     sb.from('recharge_requests').select('*').order('created_at',{ascending:false}),
     sb.from('withdraw_requests').select('*').order('created_at',{ascending:false}),
+    sb.from('cafeteria_products').select('*').eq('status','disponible'),
+    sb.from('daily_menu').select('*'),
   ]);
+  const todayWd = (()=>{ const d=new Date().getDay(); return d>=1&&d<=5?d:null; })();
+  const todayProductIds = new Set((menuRes.data||[]).filter(m=>m.weekday===todayWd).map(m=>m.product_id));
+  CAFETERIA_MENU_TODAY.length=0;
+  (prodRes.data||[]).forEach(p=>{ if(todayProductIds.has(p.id)) CAFETERIA_MENU_TODAY.push({id:p.id,name:p.name,emoji:p.emoji,category:p.category,price:Number(p.price)}); });
   for(const k in ACCOUNTS) delete ACCOUNTS[k];
   (accRes.data||[]).forEach(a=>{
     ACCOUNTS[a.number] = {
       number:a.number, nom:a.nom, prenom:a.prenom, genre:a.genre, password:a.password, role:a.role, classe:a.classe,
       name:a.prenom+' '+a.nom, balance:Number(a.balance), status:a.status, accountType:a.account_type,
+      eleveNom:a.eleve_nom, elevePrenom:a.eleve_prenom, relation:a.relation,
       cards:[], transactions:[], notifications:[], createdAt:new Date(a.created_at),
     };
   });
@@ -628,7 +637,7 @@ function user(){ return ACCOUNTS[state.session]; }
 /* =========================================================
    AUTH FLOW
 ========================================================= */
-const auth = { view:'role', role:null, form:{}, createdNumber:null, showCode:false, loginNumber:'', loginPass:'', loginErr:'' };
+const auth = { view:'role', role:null, form:{}, createdNumber:null, showCode:false, loginNumber:'', loginPass:'', loginErr:'', parentCode:'', parentCodeErr:'', parentPending:null, parentCountdown:100 };
 
 const ROLES = [
   {id:'personnel', label:'Membres du personnel'},
@@ -705,12 +714,83 @@ function renderParentInfo(){
     <button class="icon-btn" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#fff;margin-bottom:18px;" onclick="auth.view='role';renderRoot()">${icon('back',18)}</button>
     <div class="login-brand"><div class="mark">H</div><span>HUMA BANK</span></div>
     <h1 class="login-hero" style="font-size:24px;">Compte Parent</h1>
-    <p class="login-sub" style="margin-top:14px;line-height:1.7;">Pour des raisons de sécurité, les comptes parents doivent être ouverts directement à l'établissement.</p>
-    <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:18px;margin-top:10px;color:#fff;font-size:13px;line-height:1.7;">
-      Merci de vous présenter au bureau administratif de l'établissement avec une pièce d'identité afin qu'un compte soit créé pour vous.
+    <p class="login-sub" style="margin-top:14px;line-height:1.7;">Un compte parent doit d'abord être créé par l'administration de l'établissement. Si un administrateur vous a communiqué un code, entrez-le ci-dessous.</p>
+    <div class="field" style="margin-top:14px;"><label style="color:#B9C6EE;">Code reçu de l'administration</label><input id="parent-code" maxlength="6" placeholder="Ex. 482017" value="${auth.parentCode||''}"></div>
+    ${auth.parentCodeErr?`<p style="color:#F3A6A6;font-size:12.5px;margin-top:-6px;">${auth.parentCodeErr}</p>`:''}
+    <button class="btn-primary" onclick="submitParentCode()">Continuer</button>
+    <div style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:18px;margin-top:16px;color:#fff;font-size:12.5px;line-height:1.7;">
+      Vous n'avez pas encore de code ? Présentez-vous au bureau administratif de l'établissement avec une pièce d'identité.
     </div>
     <button class="btn-secondary" style="margin-top:20px;" onclick="auth.view='role';renderRoot()">Retour</button>
   </div>`;
+}
+async function submitParentCode(){
+  const code = document.getElementById('parent-code').value.trim();
+  if(!code){ auth.parentCodeErr='Veuillez entrer un code.'; renderRoot(); return; }
+  const { data } = await sb.from('parent_pending').select('*').eq('code',code).eq('status','pending').maybeSingle();
+  if(!data){ auth.parentCodeErr='Code invalide ou déjà utilisé.'; renderRoot(); return; }
+  auth.parentCodeErr=''; auth.parentPending = data;
+  auth.view='parent-password'; auth.parentCountdown=100;
+  renderRoot();
+  startParentCountdown();
+}
+let parentCountdownTimer=null;
+function startParentCountdown(){
+  clearInterval(parentCountdownTimer);
+  parentCountdownTimer = setInterval(()=>{
+    auth.parentCountdown--;
+    if(auth.parentCountdown<=0){
+      clearInterval(parentCountdownTimer);
+      auth.view='role'; auth.parentPending=null; auth.parentCode='';
+      toast("Temps écoulé — redemandez un code à l'administration.");
+      renderRoot();
+      return;
+    }
+    const el = document.getElementById('parent-countdown');
+    if(el) el.textContent = auth.parentCountdown+'s';
+  }, 1000);
+}
+function renderParentPassword(){
+  const p = auth.parentPending;
+  const parentName = p.relation==='pere' ? `${p.father_prenom} ${p.father_nom}` : `${p.mother_prenom} ${p.mother_nom}`;
+  return `
+  <div class="login-wrap">
+    <div class="login-brand"><div class="mark">H</div><span>HUMA BANK</span></div>
+    <h1 class="login-hero" style="font-size:22px;">Bienvenue ${parentName}</h1>
+    <p class="login-sub">Créez votre mot de passe pour finaliser votre compte parent lié à ${p.eleve_prenom} ${p.eleve_nom} (${p.classe}).</p>
+    <div style="text-align:center;margin:12px 0;"><span id="parent-countdown" style="font-family:'Manrope';font-weight:800;font-size:22px;color:#F3A6A6;">${auth.parentCountdown}s</span><p style="color:#B9C6EE;font-size:11.5px;margin:4px 0 0;">Temps restant pour choisir votre mot de passe</p></div>
+    <div class="field pw-wrap"><label style="color:#B9C6EE;">Nouveau mot de passe</label><input id="parent-pass" type="password" placeholder="••••••"><button type="button" class="pw-eye" onclick="toggleFieldType('parent-pass',this)">${icon('eye',17)}</button></div>
+    <button class="btn-primary" onclick="finalizeParentAccount()">Créer mon mot de passe</button>
+  </div>`;
+}
+async function finalizeParentAccount(){
+  const pass = document.getElementById('parent-pass').value;
+  if(!pass){ toast('Veuillez créer un mot de passe'); return; }
+  clearInterval(parentCountdownTimer);
+  const p = auth.parentPending;
+  const number = genNumber();
+  const nom = p.relation==='pere' ? p.father_nom : p.mother_nom;
+  const prenom = p.relation==='pere' ? p.father_prenom : p.mother_prenom;
+  const acc = {
+    number, nom, prenom, genre:'', password:pass, role:'parent', classe:p.classe,
+    name: prenom+' '+nom, balance:0, status:'active', accountType:'courant',
+    relation:p.relation, eleveNom:p.eleve_nom, elevePrenom:p.eleve_prenom,
+    cards:[], transactions:[], notifications:[], createdAt:new Date(),
+  };
+  ACCOUNTS[number] = acc;
+  await Promise.all([
+    sb.from('accounts').insert({
+      number, nom, prenom, genre:'', password:pass, role:'parent', classe:p.classe,
+      balance:0, status:'active', account_type:'courant',
+      relation:p.relation, father_nom:p.father_nom, father_prenom:p.father_prenom,
+      mother_nom:p.mother_nom, mother_prenom:p.mother_prenom,
+      aunt_nom:p.aunt_nom, aunt_prenom:p.aunt_prenom, uncle_nom:p.uncle_nom, uncle_prenom:p.uncle_prenom,
+      eleve_nom:p.eleve_nom, eleve_prenom:p.eleve_prenom,
+    }),
+    sb.from('parent_pending').update({status:'used'}).eq('code',p.code),
+  ]);
+  auth.createdNumber = number; auth.showCode=false; auth.parentPending=null;
+  auth.view='success'; renderRoot();
 }
 
 function submitRegistration(){
@@ -1143,34 +1223,76 @@ function renderPaiements(){
 function openCafeteria(){
   const u = user();
   if(u.cards.length===0){ toast('Créez d’abord une carte dans l’onglet Cartes'); return; }
-  openModal(sheetWrap('Cafétéria', `
-    <div style="text-align:center;margin:10px 0 18px;">
-      <input class="amount-input" id="caf-amt" type="number" placeholder="0" value="5">
-    </div>
-    <div class="summary-box">
-      <div class="summary-row"><span>Payé avec</span><b>Carte •••• ${u.cards[0].last4}</b></div>
-      <div class="summary-row"><span>Solde carte</span><b class="tnum">${money(u.cards[0].cardBalance)}</b></div>
-    </div>
-    <button class="btn-primary" onclick="payCafeteria()">Payer</button>
-  `));
+  cafCart = {};
+  renderCafeteriaModal();
+}
+function renderCafeteriaModal(){
+  const items = CAFETERIA_MENU_TODAY;
+  const total = items.reduce((s,p)=>s+(cafCart[p.id]||0)*p.price,0);
+  const byCat = {};
+  items.forEach(p=>{ (byCat[p.category]=byCat[p.category]||[]).push(p); });
+  document.getElementById('modal-root').innerHTML = `<div class="modal-root open"><div class="modal-backdrop" onclick="closeModal()"></div><div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head"><h3>Menu du jour</h3><button class="sheet-close" onclick="closeModal()">${icon('x',15)}</button></div>
+    ${items.length===0 ? `<div class="empty-state"><div class="es-ic">${icon('food',24)}</div><h4>Aucun menu aujourd'hui</h4><p>La cafétéria n'a pas encore programmé le menu de ce jour.</p></div>` : Object.entries(byCat).map(([cat,list])=>`
+      <div class="section-title" style="margin-top:14px;">${cat}</div>
+      <div class="list-card">
+        ${list.map(p=>`
+          <div class="tx-row">
+            <div class="tx-icn">${p.emoji||'🍽'}</div>
+            <div class="tx-mid"><p class="tx-desc">${p.name}</p><p class="tx-cat">${money(p.price)}</p></div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button class="icon-btn" style="width:30px;height:30px;" onclick="cafQty('${p.id}',-1)">−</button>
+              <b style="min-width:16px;text-align:center;">${cafCart[p.id]||0}</b>
+              <button class="icon-btn" style="width:30px;height:30px;" onclick="cafQty('${p.id}',1)">+</button>
+            </div>
+          </div>`).join('')}
+      </div>`).join('')}
+    ${items.length>0 ? `
+      <div class="summary-box" style="margin-top:16px;">
+        <div class="summary-row"><span>Payé avec</span><b>Carte •••• ${user().cards[0].last4}</b></div>
+        <div class="summary-row"><span>Total</span><b class="tnum">${money(total)}</b></div>
+      </div>
+      <button class="btn-primary" ${total<=0?'disabled':''} onclick="payCafeteria()">Commander — ${money(total)}</button>
+    ` : ''}
+  </div></div>`;
+}
+function cafQty(id,delta){
+  const cur = cafCart[id]||0;
+  const next = Math.max(0, cur+delta);
+  if(next===0) delete cafCart[id]; else cafCart[id]=next;
+  renderCafeteriaModal();
 }
 async function payCafeteria(){
   const u = user(); const c = u.cards[0];
-  const amt = parseFloat(document.getElementById('caf-amt').value)||5;
+  const items = Object.entries(cafCart).map(([id,qty])=>{
+    const p = CAFETERIA_MENU_TODAY.find(x=>x.id===id);
+    return {name:p.name, qty, price:p.price};
+  });
+  const amt = items.reduce((s,i)=>s+i.qty*i.price,0);
+  if(amt<=0) return;
   if(amt>c.cardBalance){ toast('Solde de la carte insuffisant — rechargez votre carte'); return; }
   c.cardBalance -= amt;
   const id = genId('HB');
+  const proofCode = String(Math.floor(1000+Math.random()*8999));
   const tx = {id,label:todayStr(),desc:'Paiement — Cafétéria',cat:'Cafétéria',amount:-amt,date:new Date()};
   u.transactions.unshift(tx);
-  const notif = {id:genId('N'),text:'Votre paiement à la cafétéria a été effectué.',date:new Date(),read:false};
+  const notif = {id:genId('N'),text:'Votre commande à la cafétéria a été passée. Code de preuve : '+proofCode,date:new Date(),read:false};
   u.notifications.unshift(notif);
   await Promise.all([
     sb.from('cards').update({card_balance:c.cardBalance}).eq('id',c.id),
     sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
     sb.from('notifications').insert({id:notif.id, account_number:u.number, text:notif.text, read:false}),
-    sb.from('cafeteria_orders').insert({id:genId('CAF'), account_number:u.number, client_name:u.name, client_type:roleLabel(u.role), classe:u.classe||null, items:[{name:'Cafétéria',qty:1,price:amt}], total:amt, payment:'Carte virtuelle', status:'Payée', tx_id:id}),
+    sb.from('cafeteria_orders').insert({
+      id:genId('CAF'), account_number:u.number,
+      client_name: u.role==='parent' ? `${u.name} — Parent de ${u.elevePrenom||''} ${u.eleveNom||''}`.trim() : u.name,
+      client_type: u.role==='parent' ? 'Parent' : roleLabel(u.role),
+      classe: u.classe||null,
+      items, total:amt, payment:'Carte virtuelle', status:'Payée', tx_id:id, proof_code:proofCode,
+    }),
   ]);
-  showResult('Paiement effectué','Cafétéria',-amt,id);
+  cafCart = {};
+  showResult('Commande passée',`Code de preuve : ${proofCode}`,-amt,id);
 }
 
 /* =========================================================
@@ -1841,6 +1963,7 @@ function renderRoot(){
 }
 function renderAuthOrParent(){
   if(auth.view==='parent-info') return renderParentInfo();
+  if(auth.view==='parent-password') return renderParentPassword();
   return renderAuth();
 }
 

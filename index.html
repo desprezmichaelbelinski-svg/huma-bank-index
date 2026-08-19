@@ -992,6 +992,7 @@ function renderScreen(){
     case 'finances': return renderFinances();
     case 'profil': return renderProfil();
     case 'abonnement': return renderAbonnement();
+    case 'dictionnaire': return renderDictionnaire();
     default: return renderAccueil();
   }
 }
@@ -1565,11 +1566,83 @@ function renderProfil(){
     <p class="settings-label">Préférences</p>
     <div class="settings-item"><div class="sic">${icon('bell',16)}</div><div class="stx">Notifications<small>Alertes et rappels</small></div><button class="toggle ${sec.notif?'on':''}" onclick="toggleSec('notif')"></button></div>
     <div class="settings-item"><div class="sic">${icon('gear',16)}</div><div class="stx">Mode sombre<small>Adapter l'affichage</small></div><button class="toggle ${state.dark?'on':''}" onclick="toggleDark()"></button></div>
+    <div class="settings-item" style="cursor:pointer;" onclick="state.screen='dictionnaire';renderRoot()"><div class="sic">${icon('search',16)}</div><div class="stx">Dictionnaire<small>Tout savoir sur les 3 applications</small></div>${icon('chevronR',16)}</div>
   </div>
   <button class="logout-btn" onclick="logout()">${icon('back',16)} Déconnexion</button>
   `;
 }
 const sec={bio:true,notif:true};
+const DICTIONNAIRE = [
+  {app:'Index', terme:'Numéro de compte', def:"Identifiant unique à 6 chiffres attribué à chaque compte. Sert pour se connecter, recevoir des transferts et être identifié par l'administration."},
+  {app:'Index', terme:'Carte virtuelle', def:"Carte HUMA BANK liée au compte. La 1ère est gratuite, la 2ème coûte 100 HUMA prélevés sur le solde du compte. Maximum 2 cartes par compte."},
+  {app:'Index', terme:'Recharge', def:"Ajout de fonds au compte via MonCash, NatCash (avec preuve de paiement) ou le bouton démo. La demande passe en attente jusqu'à approbation par l'admin banque."},
+  {app:'Index', terme:'Retrait', def:"Demande de retrait de fonds. Des frais de 2% s'appliquent au-delà de 500 HUMA. Le solde n'est débité qu'après approbation par l'admin banque."},
+  {app:'Index', terme:'Transfert', def:"Envoi ou réception d'argent entre deux comptes via le numéro à 6 chiffres du destinataire. Confirmation requise avant envoi."},
+  {app:'Index', terme:'Cafétéria (commander)', def:"Écran affichant le menu du jour programmé par l'admin cafétéria. Chaque plat a une case de quantité ; le paiement se fait avec la carte virtuelle."},
+  {app:'Index', terme:'Menu du jour', def:"Liste de plats fixée à l'avance par l'admin cafétéria pour chacun des 5 jours d'école (Lundi à Vendredi). L'app détecte automatiquement le jour réel et affiche le bon menu."},
+  {app:'Index', terme:'Code de preuve', def:"Code à 4 chiffres généré après chaque commande cafétéria, envoyé en notification à l'acheteur. L'admin cafétéria peut le demander pour vérifier qu'une commande a bien été passée."},
+  {app:'Index', terme:'Notifications', def:"Alertes reçues pour : transactions, recharges/retraits approuvés ou refusés, commandes cafétéria prêtes."},
+  {app:'Index', terme:'Rôle Élève', def:"Inscription sans mot de passe, avec sélection de la classe. Accès simplifié à l'app."},
+  {app:'Index', terme:'Rôle Parent', def:"Compte créé exclusivement par l'admin banque (onglet Parents). Un code est communiqué oralement au parent, qui doit le saisir dans l'index puis créer son propre mot de passe."},
+  {app:'Index', terme:'Compte à rebours parent (100s)', def:"Après avoir entré le code reçu de l'admin, le parent dispose de 100 secondes pour créer son mot de passe. Passé ce délai, retour à l'écran précédent et l'admin doit générer un nouveau code."},
+  {app:'Index', terme:'Code PIN', def:"Code utilisé pour révéler les informations sensibles d'une carte (numéro complet, CVV)."},
+  {app:'Index', terme:'Biométrie', def:"Option Empreinte / Face ID pour sécuriser l'accès au compte."},
+  {app:'Index', terme:'Mode sombre', def:"Thème sombre de l'application, activable dans le Profil. Les graphiques passent en blanc pour rester lisibles."},
+  {app:'Index', terme:'Abonnement', def:"Section dédiée à la formule du compte, accessible depuis l'onglet Paiements."},
+  {app:'Index', terme:'Compte certifié', def:"Badge attribué par l'admin banque à un compte de confiance, visible avec une coche bleue."},
+  {app:'Index', terme:'Compte suspendu', def:"Compte bloqué par l'admin banque — la connexion est refusée jusqu'à réactivation."},
+  {app:'Index', terme:'Rôle Direction', def:"Rôle disposant d'un mini-dashboard intégré à l'index : approbation des demandes, vue des comptes et des transactions."},
+  {app:'Admin Banque', terme:'Utilisateurs', def:"Liste de tous les comptes de l'établissement, filtrable par rôle (élèves, parents, professeurs, personnel)."},
+  {app:'Admin Banque', terme:'Onglet Parents', def:"Seul endroit permettant de créer un compte parent : formulaire Père ou Mère (un seul rempli), Tante, Oncle, informations de l'élève et classe. Génère un code à communiquer oralement au parent."},
+  {app:'Admin Banque', terme:'Comptes courants / certifiés', def:"Classement des comptes bancaires selon qu'ils sont certifiés (badge de confiance) ou non."},
+  {app:'Admin Banque', terme:'Gestion des cartes (admin)', def:"Permet de geler ou dégeler n'importe quelle carte virtuelle émise dans l'établissement."},
+  {app:'Admin Banque', terme:'Transactions (admin)', def:"Historique complet de toutes les transactions de l'établissement, filtrable par catégorie (Dépôt, Transfert, Retrait, Cafétéria...)."},
+  {app:'Admin Banque', terme:'Paiements Cafétéria (lecture seule)', def:"Suivi informatif des paiements cafétéria — la banque n'a aucun droit de modification sur cette section."},
+  {app:'Admin Banque', terme:'Sécurité', def:"Journal de toutes les tentatives de connexion (réussies et échouées) enregistrées sur l'index."},
+  {app:'Admin Banque', terme:'Notifications (admin)', def:"Demandes de recharge et de retrait en attente d'approbation ou de refus."},
+  {app:'Admin Banque', terme:'Paramètres (banque)', def:"Nom de l'établissement, numéro NatCash, frais de carte supplémentaire, authentification à deux facteurs."},
+  {app:'Admin Banque', terme:'Compte administrateur (banque)', def:"Chaque administrateur a son propre compte (nom, prénom, genre, mot de passe). Plusieurs administrateurs peuvent coexister."},
+  {app:'Admin Cafétéria', terme:'Menu du jour (admin)', def:"Programmation fixe des plats disponibles pour chacun des 5 jours d'école — ne change pas d'une semaine à l'autre une fois programmé."},
+  {app:'Admin Cafétéria', terme:'Catalogue', def:"Liste complète de tous les produits existants (disponibles ou non), organisés par catégorie."},
+  {app:'Admin Cafétéria', terme:'Stock', def:"Suivi des quantités disponibles par produit, avec historique des entrées et sorties."},
+  {app:'Admin Cafétéria', terme:'Commandes (admin)', def:"Suivi des commandes par statut (En attente, Payée, En préparation, Prête, Servie, Annulée), regroupées par classe."},
+  {app:'Admin Cafétéria', terme:'Vérification par code de preuve', def:"L'admin peut demander le code à 4 chiffres reçu par l'acheteur pour confirmer qu'une commande a réellement été passée."},
+  {app:'Admin Cafétéria', terme:'Paiements (admin cafétéria)', def:"Historique complet des transactions liées aux commandes de la cafétéria."},
+  {app:'Admin Cafétéria', terme:'Compte administrateur (cafétéria)', def:"Chaque administrateur a son propre compte (nom, prénom, genre, mot de passe). Plusieurs administrateurs peuvent coexister."},
+  {app:'Toutes les apps', terme:'HUMA', def:"Devise officielle utilisée dans les 3 applications de l'établissement."},
+  {app:'Toutes les apps', terme:'Synchronisation en direct', def:"Les 3 applications partagent la même base de données Supabase — toute action effectuée dans l'une se reflète immédiatement dans les autres."},
+];
+
+
+/* ============================================================
+   DICTIONNAIRE — glossaire complet des 3 applications HUMA BANK
+============================================================ */
+let dictQuery = '';
+function renderDictionnaire(){
+  const q = dictQuery.trim().toLowerCase();
+  const filtered = DICTIONNAIRE.filter(d => !q || d.terme.toLowerCase().includes(q) || d.def.toLowerCase().includes(q) || d.app.toLowerCase().includes(q));
+  const groups = {};
+  filtered.forEach(d => { (groups[d.app]=groups[d.app]||[]).push(d); });
+  const badgeColor = {'Index':'#2748A0','Admin Banque':'#1B8F5A','Admin Cafétéria':'#B8860B','Toutes les apps':'#8B5FBF'};
+  return `
+  <div class="section-title" style="margin-top:16px;">Dictionnaire</div>
+  <p style="color:var(--muted);font-size:12.5px;margin:-8px 0 14px;">Glossaire complet des 3 applications HUMA BANK — index, dashboard admin banque et admin cafétéria.</p>
+  <div class="search-box" style="margin-bottom:16px;">${icon('search',16)}<input placeholder="Rechercher un terme..." value="${dictQuery}" oninput="dictQuery=this.value;renderRoot()"></div>
+  ${Object.keys(groups).length===0 ? `<div class="empty-state"><div class="es-ic">${icon('search',24)}</div><h4>Aucun résultat</h4><p>Essayez un autre mot-clé.</p></div>` :
+  Object.entries(groups).map(([app,items])=>`
+    <div class="section-title" style="margin-top:18px;font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);">${app}</div>
+    <div class="list-card">
+      ${items.map(d=>`
+        <div class="tx-row" style="align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <p class="tx-desc" style="display:flex;align-items:center;gap:8px;">${d.terme}<span style="width:7px;height:7px;border-radius:50%;background:${badgeColor[d.app]};display:inline-block;flex-shrink:0;"></span></p>
+            <p class="tx-cat" style="white-space:normal;line-height:1.5;margin-top:4px;">${d.def}</p>
+          </div>
+        </div>`).join('')}
+    </div>`).join('')}
+  `;
+}
+
 function renderAbonnement(){
   return `
   <div class="section-title" style="margin-top:16px;">Abonnement</div>

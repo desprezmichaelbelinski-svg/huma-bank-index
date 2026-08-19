@@ -1213,6 +1213,9 @@ function renderPaiements(){
     <button class="pay-tile" onclick="openCafeteria()">
       <div class="pi">${icon('food',22)}</div><span>Cafétéria</span><small>Paiement par carte</small>
     </button>
+    <button class="pay-tile" onclick="state.screen='abonnement';renderRoot()">
+      <div class="pi">${icon('shield',22)}</div><span>Abonnement</span><small>Gérer votre formule</small>
+    </button>
   </div>
   <div class="section-title">Historique des paiements</div>
   <div class="list-card">
@@ -1550,7 +1553,7 @@ function renderProfil(){
   </div>
   <div class="settings-group">
     <p class="settings-label">Informations personnelles</p>
-    <div class="settings-item"><div class="sic">${icon('user',16)}</div><div class="stx">Numéro de compte<small>${state.showAccNum? u.number : maskNumber(u.number)}</small></div><button class="toggle" style="width:34px;height:34px;border-radius:50%;background:var(--navy-100);color:var(--navy-700);" onclick="toggleAccNum()">${icon(state.showAccNum?'eyeOff':'eye',15)}</button></div>
+    <div class="settings-item"><div class="sic">${icon('user',16)}</div><div class="stx">Numéro de compte<small>${state.showAccNum? u.number : maskNumber(u.number)}</small></div></div>
     <div class="settings-item"><div class="sic">${icon('phoneIc',16)}</div><div class="stx">Rôle<small>${roleLabel(u.role)}</small></div></div>
   </div>
   <div class="settings-group">
@@ -1562,7 +1565,6 @@ function renderProfil(){
     <p class="settings-label">Préférences</p>
     <div class="settings-item"><div class="sic">${icon('bell',16)}</div><div class="stx">Notifications<small>Alertes et rappels</small></div><button class="toggle ${sec.notif?'on':''}" onclick="toggleSec('notif')"></button></div>
     <div class="settings-item"><div class="sic">${icon('gear',16)}</div><div class="stx">Mode sombre<small>Adapter l'affichage</small></div><button class="toggle ${state.dark?'on':''}" onclick="toggleDark()"></button></div>
-    <div class="settings-item" style="cursor:pointer;" onclick="state.screen='abonnement';renderRoot()"><div class="sic">${icon('shield',16)}</div><div class="stx">Abonnement<small>Gérer votre formule</small></div>${icon('chevronR',16)}</div>
   </div>
   <button class="logout-btn" onclick="logout()">${icon('back',16)} Déconnexion</button>
   `;
@@ -1576,7 +1578,7 @@ function renderAbonnement(){
     <h4>Bientôt disponible</h4>
     <p>Cette section sera configurée prochainement.</p>
   </div>
-  <button class="btn-secondary" onclick="state.screen='profil';renderRoot()">Retour au profil</button>
+  <button class="btn-secondary" onclick="state.screen='paiements';renderRoot()">Retour aux paiements</button>
   `;
 }
 function toggleSec(k){ sec[k]=!sec[k]; renderRoot(); }
@@ -1926,10 +1928,12 @@ function drawDoughnutChart(id,data,colors){
     start += angle;
   });
 }
+function fluxColor(){ return state.dark ? '#FFFFFF' : '#0A1B3D'; }
+function fluxFill(){ return state.dark ? 'rgba(255,255,255,.12)' : 'rgba(10,27,61,.15)'; }
 function drawCharts(){
-  drawLineFlux('mini-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
-  drawLineFlux('finance-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
-  drawLineFlux('admin-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
+  drawLineFlux('mini-chart', state.displaySeries, fluxColor(), fluxFill());
+  drawLineFlux('finance-chart', state.displaySeries, fluxColor(), fluxFill());
+  drawLineFlux('admin-chart', state.displaySeries, fluxColor(), fluxFill());
   drawDoughnutChart('role-chart', [roleCount('eleve'),roleCount('professeur'),roleCount('personnel'),roleCount('direction')], ['#0C2350','#2748A0','#3E5FC4','#8FA6F5']);
 }
 function ensureTicker(){
@@ -1943,9 +1947,9 @@ function ensureTicker(){
       state.displaySeries[i] = cur + (target-cur)*0.06;
     }
     while(state.displaySeries.length>state.financeSeries.length) state.displaySeries.shift();
-    drawLineFlux('mini-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
-    drawLineFlux('finance-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
-    drawLineFlux('admin-chart', state.displaySeries, '#0A1B3D', 'rgba(10,27,61,.15)');
+    drawLineFlux('mini-chart', state.displaySeries, fluxColor(), fluxFill());
+    drawLineFlux('finance-chart', state.displaySeries, fluxColor(), fluxFill());
+    drawLineFlux('admin-chart', state.displaySeries, fluxColor(), fluxFill());
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

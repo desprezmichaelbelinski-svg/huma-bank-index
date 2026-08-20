@@ -593,7 +593,14 @@ const CURD = `<img class="cur on-dark" src="data:image/png;base64,iVBORw0KGgoAAA
 /* =========================================================
    HELPERS
 ========================================================= */
-function genNumber(){ let n; do{ n=String(Math.floor(100000+Math.random()*899999)); }while(ACCOUNTS[n]); return n; }
+async function genNumber(){
+  let n;
+  do{
+    n = String(Math.floor(100000+Math.random()*899999));
+    const { data } = await sb.from('accounts').select('number').eq('number',n).maybeSingle();
+    if(!data) return n;
+  } while(true);
+}
 function genId(prefix){ return prefix+'-'+String(Math.floor(100000+Math.random()*899999)); }
 function fmtNum(n){ const neg=n<0; return (neg?'-':'')+Math.abs(n).toFixed(2); }
 function fmt(n){ return '$'+fmtNum(n); } // plain text, for inputs/logic
@@ -633,7 +640,7 @@ const AV_PALETTE = ['#2748A0','#8B5FBF','#1B8F5A','#C4433F','#B8860B','#0C7C8C']
 function colorFor(n){ let s=0; for(const c of n) s+=c.charCodeAt(0); return AV_PALETTE[s%AV_PALETTE.length]; }
 
 async function createAccount({nom,prenom,genre,password,role,classe}){
-  const number = genNumber();
+  const number = await genNumber();
   const acc = {
     number, nom, prenom, genre:genre||'', password:password||'', role, classe:classe||'',
     name: prenom+' '+nom,
@@ -650,42 +657,53 @@ async function createAccount({nom,prenom,genre,password,role,classe}){
 
 // Charge toutes les données depuis Supabase (comptes, cartes, transactions,
 // notifications, demandes) dans le même format que l'ancien cache local.
-async function loadFromSupabase(){
-  const [accRes, cardRes, txRes, notifRes, rcRes, wdRes, prodRes, menuRes] = await Promise.all([
-    sb.from('accounts').select('*'),
-    sb.from('cards').select('*'),
-    sb.from('transactions').select('*').order('created_at',{ascending:false}),
-    sb.from('notifications').select('*').order('created_at',{ascending:false}),
-    sb.from('recharge_requests').select('*').order('created_at',{ascending:false}),
-    sb.from('withdraw_requests').select('*').order('created_at',{ascending:false}),
+async function loadCafeteriaMenu(){
+  const todayWd = (()=>{ const d=new Date().getDay(); return d>=1&&d<=5?d:null; })();
+  const [prodRes, menuRes] = await Promise.all([
     sb.from('cafeteria_products').select('*').eq('status','disponible'),
     sb.from('daily_menu').select('*'),
   ]);
-  const todayWd = (()=>{ const d=new Date().getDay(); return d>=1&&d<=5?d:null; })();
   const todayProductIds = new Set((menuRes.data||[]).filter(m=>m.weekday===todayWd).map(m=>m.product_id));
   CAFETERIA_MENU_TODAY.length=0;
   (prodRes.data||[]).forEach(p=>{ if(todayProductIds.has(p.id)) CAFETERIA_MENU_TODAY.push({id:p.id,name:p.name,emoji:p.emoji,category:p.category,price:Number(p.price)}); });
-  for(const k in ACCOUNTS) delete ACCOUNTS[k];
+}
+// Charge UNIQUEMENT le compte connecté (pas toute la table — indispensable à 20 000+ comptes)
+async function loadMyAccountData(number){
+  const [accRes, cardRes, txRes, notifRes] = await Promise.all([
+    sb.from('accounts').select('*').eq('number',number).maybeSingle(),
+    sb.from('cards').select('*').eq('account_number',number),
+    sb.from('transactions').select('*').eq('account_number',number).order('created_at',{ascending:false}).limit(200),
+    sb.from('notifications').select('*').eq('account_number',number).order('created_at',{ascending:false}).limit(100),
+  ]);
+  const a = accRes.data;
+  if(!a) return null;
+  const acc = {
+    number:a.number, nom:a.nom, prenom:a.prenom, genre:a.genre, password:a.password, role:a.role, classe:a.classe,
+    name:a.prenom+' '+a.nom, balance:Number(a.balance), status:a.status, accountType:a.account_type,
+    eleveNom:a.eleve_nom, elevePrenom:a.eleve_prenom, relation:a.relation,
+    cards:[], transactions:[], notifications:[], createdAt:new Date(a.created_at),
+  };
+  (cardRes.data||[]).forEach(c=>{ acc.cards.push({id:c.id, holder:c.holder, last4:c.last4, full:c.full_number, cvv:c.cvv, exp:c.exp, frozen:c.frozen, cardBalance:Number(c.card_balance)}); });
+  (txRes.data||[]).forEach(t=>{ const d=new Date(t.created_at); acc.transactions.push({id:t.id, desc:t.description, cat:t.category, amount:Number(t.amount), date:d, label:todayStr2(d)}); });
+  (notifRes.data||[]).forEach(n=>{ acc.notifications.push({id:n.id, text:n.text, read:n.read, date:new Date(n.created_at)}); });
+  ACCOUNTS[number] = acc;
+  return acc;
+}
+// Réservé au rôle Direction : chargement borné pour son mini-panel intégré
+// (la gestion complète des 20 000 comptes se fait dans le vrai dashboard admin séparé)
+async function loadDirectionData(){
+  const [accRes, rcRes, wdRes] = await Promise.all([
+    sb.from('accounts').select('*').neq('role','direction').order('created_at',{ascending:false}).limit(300),
+    sb.from('recharge_requests').select('*').order('created_at',{ascending:false}).limit(100),
+    sb.from('withdraw_requests').select('*').order('created_at',{ascending:false}).limit(100),
+  ]);
   (accRes.data||[]).forEach(a=>{
+    if(ACCOUNTS[a.number]) return; // ne pas écraser le compte déjà chargé en détail
     ACCOUNTS[a.number] = {
-      number:a.number, nom:a.nom, prenom:a.prenom, genre:a.genre, password:a.password, role:a.role, classe:a.classe,
+      number:a.number, nom:a.nom, prenom:a.prenom, role:a.role, classe:a.classe,
       name:a.prenom+' '+a.nom, balance:Number(a.balance), status:a.status, accountType:a.account_type,
-      eleveNom:a.eleve_nom, elevePrenom:a.eleve_prenom, relation:a.relation,
       cards:[], transactions:[], notifications:[], createdAt:new Date(a.created_at),
     };
-  });
-  (cardRes.data||[]).forEach(c=>{
-    const acc = ACCOUNTS[c.account_number]; if(!acc) return;
-    acc.cards.push({id:c.id, holder:c.holder, last4:c.last4, full:c.full_number, cvv:c.cvv, exp:c.exp, frozen:c.frozen, cardBalance:Number(c.card_balance)});
-  });
-  (txRes.data||[]).forEach(t=>{
-    const acc = ACCOUNTS[t.account_number]; if(!acc) return;
-    const d = new Date(t.created_at);
-    acc.transactions.push({id:t.id, desc:t.description, cat:t.category, amount:Number(t.amount), date:d, label:todayStr2(d)});
-  });
-  (notifRes.data||[]).forEach(n=>{
-    const acc = ACCOUNTS[n.account_number]; if(!acc) return;
-    acc.notifications.push({id:n.id, text:n.text, read:n.read, date:new Date(n.created_at)});
   });
   RECHARGE_REQUESTS.length=0;
   (rcRes.data||[]).forEach(r=>{
@@ -707,22 +725,42 @@ function todayStr2(d){
 // Recharge le cache local puis redessine — appelé après chaque écriture et
 // en écoute temps réel des changements faits par les 2 autres apps.
 let syncDebounce = null;
-async function syncAll(){
-  clearTimeout(syncDebounce);
-  syncDebounce = setTimeout(async ()=>{
-    await loadFromSupabase();
+let syncDebounceMy = null;
+async function syncMyAccount(){
+  clearTimeout(syncDebounceMy);
+  syncDebounceMy = setTimeout(async ()=>{
+    if(!state.session) return;
+    await loadMyAccountData(state.session);
     if(typeof renderRoot==='function') renderRoot();
   }, 220);
 }
+let syncDebounceDir = null;
+async function syncDirectionRequests(){
+  clearTimeout(syncDebounceDir);
+  syncDebounceDir = setTimeout(async ()=>{
+    await loadDirectionData();
+    if(typeof renderRoot==='function') renderRoot();
+  }, 220);
+}
+let realtimeChannel = null, directionChannel = null;
 function startRealtime(){
-  sb.channel('index-sync')
-    .on('postgres_changes', {event:'*', schema:'public', table:'accounts'}, syncAll)
-    .on('postgres_changes', {event:'*', schema:'public', table:'cards'}, syncAll)
-    .on('postgres_changes', {event:'*', schema:'public', table:'transactions'}, syncAll)
-    .on('postgres_changes', {event:'*', schema:'public', table:'notifications'}, syncAll)
-    .on('postgres_changes', {event:'*', schema:'public', table:'recharge_requests'}, syncAll)
-    .on('postgres_changes', {event:'*', schema:'public', table:'withdraw_requests'}, syncAll)
+  const num = state.session;
+  if(!num) return;
+  if(realtimeChannel) sb.removeChannel(realtimeChannel);
+  realtimeChannel = sb.channel('user-'+num)
+    .on('postgres_changes', {event:'*', schema:'public', table:'accounts', filter:`number=eq.${num}`}, syncMyAccount)
+    .on('postgres_changes', {event:'*', schema:'public', table:'cards', filter:`account_number=eq.${num}`}, syncMyAccount)
+    .on('postgres_changes', {event:'*', schema:'public', table:'transactions', filter:`account_number=eq.${num}`}, syncMyAccount)
+    .on('postgres_changes', {event:'*', schema:'public', table:'notifications', filter:`account_number=eq.${num}`}, syncMyAccount)
     .subscribe();
+  const u = user();
+  if(u && u.role==='direction'){
+    if(directionChannel) sb.removeChannel(directionChannel);
+    directionChannel = sb.channel('direction-requests')
+      .on('postgres_changes', {event:'*', schema:'public', table:'recharge_requests'}, syncDirectionRequests)
+      .on('postgres_changes', {event:'*', schema:'public', table:'withdraw_requests'}, syncDirectionRequests)
+      .subscribe();
+  }
 }
 
 /* =========================================================
@@ -880,7 +918,7 @@ async function finalizeParentAccount(){
   if(!pass){ toast('Veuillez créer un mot de passe'); return; }
   clearInterval(parentCountdownTimer);
   const p = auth.parentPending;
-  const number = genNumber();
+  const number = await genNumber();
   const nom = p.relation==='pere' ? p.father_nom : p.mother_nom;
   const prenom = p.relation==='pere' ? p.father_prenom : p.mother_prenom;
   const acc = {
@@ -976,28 +1014,41 @@ function renderAuthLogin(){
 function logSecurity(accountNumber,userName,action,result){
   sb.from('security_log').insert({id:genId('SEC'), account_number:accountNumber||null, user_name:userName||'Inconnu', action, device:navigator.userAgent.slice(0,60), result});
 }
-function doLogin(){
+async function doLogin(){
   const num = document.getElementById('l-num').value.trim();
   const pass = document.getElementById('l-pass').value;
-  const acc = ACCOUNTS[num];
-  if(!acc){ auth.loginErr='Numéro de compte introuvable.'; logSecurity(num,null,'Tentative de connexion — compte introuvable','fail'); renderRoot(); return; }
-  if(acc.status==='suspended'){ auth.loginErr='Ce compte est suspendu. Contactez l’administration.'; logSecurity(num,acc.name,'Tentative de connexion — compte suspendu','fail'); renderRoot(); return; }
-  if(acc.password && acc.password!==pass){ auth.loginErr='Mot de passe incorrect.'; logSecurity(num,acc.name,'Mot de passe incorrect','fail'); renderRoot(); return; }
-  logSecurity(num,acc.name,'Connexion réussie','ok');
+  if(num.length!==6){ auth.loginErr='Le numéro doit contenir 6 chiffres.'; renderRoot(); return; }
+  auth.loginErr=''; auth.loginBusy=true; renderRoot();
+  const { data } = await sb.from('accounts').select('*').eq('number',num).maybeSingle();
+  auth.loginBusy=false;
+  if(!data){ auth.loginErr='Numéro de compte introuvable.'; logSecurity(num,null,'Tentative de connexion — compte introuvable','fail'); renderRoot(); return; }
+  if(data.status==='suspended'){ auth.loginErr='Ce compte est suspendu. Contactez l’administration.'; logSecurity(num,data.prenom+' '+data.nom,'Tentative de connexion — compte suspendu','fail'); renderRoot(); return; }
+  if(data.password && data.password!==pass){ auth.loginErr='Mot de passe incorrect.'; logSecurity(num,data.prenom+' '+data.nom,'Mot de passe incorrect','fail'); renderRoot(); return; }
+  logSecurity(num,data.prenom+' '+data.nom,'Connexion réussie','ok');
+  await loadMyAccountData(num);
   loginAs(num);
 }
-function loginAs(number){
+async function loginAs(number){
   state.session = number;
   const u = ACCOUNTS[number];
   state.screen = (u.role==='direction') ? 'dashboard' : 'accueil';
   state.adminScreen = 'dashboard';
   auth.view='role'; auth.form={}; auth.loginNumber=''; auth.loginPass=''; auth.loginErr='';
   renderRoot();
+  await loadCafeteriaMenu();
+  if(u.role==='direction'){ await loadDirectionData(); }
+  renderRoot();
+  startRealtime();
   try{
     if(!localStorage.getItem('huma_index_tour_seen')) setTimeout(()=>startTour(TOUR_INDEX,'huma_index_tour_seen'),600);
   }catch(e){}
 }
-function logout(){ state.session=null; auth.view='role'; renderRoot(); }
+function logout(){
+  if(realtimeChannel) sb.removeChannel(realtimeChannel);
+  if(directionChannel) sb.removeChannel(directionChannel);
+  realtimeChannel=null; directionChannel=null;
+  state.session=null; auth.view='role'; renderRoot();
+}
 
 /* =========================================================
    SHELL
@@ -1343,15 +1394,14 @@ async function doLoadCard(id){
   const amt = parseFloat(document.getElementById('ld-amt').value);
   const u = user(); const c = findCard(id);
   if(!amt||amt<=0){ toast('Montant invalide'); return; }
-  if(amt>u.balance){ toast('Solde du compte insuffisant'); return; }
-  u.balance -= amt; c.cardBalance += amt;
+  const { data:newBal, error } = await sb.rpc('debit_balance_checked', {p_number:u.number, p_amount:amt});
+  if(error){ toast('Solde du compte insuffisant'); return; }
+  u.balance = Number(newBal);
+  await sb.rpc('increment_card_balance', {p_card_id:c.id, p_amount:amt});
+  c.cardBalance += amt;
   const tx = {id:genId('HB'),label:todayStr(),desc:'Chargement de carte',cat:'Carte',amount:-amt,date:new Date()};
   u.transactions.unshift(tx);
-  await Promise.all([
-    sb.from('accounts').update({balance:u.balance}).eq('number',u.number),
-    sb.from('cards').update({card_balance:c.cardBalance}).eq('id',c.id),
-    sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
-  ]);
+  await sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount});
   closeModal(); renderRoot(); toast('Carte rechargée');
 }
 
@@ -1448,8 +1498,9 @@ async function payCafeteria(){
   });
   const amt = items.reduce((s,i)=>s+i.qty*i.price,0);
   if(amt<=0) return;
-  if(amt>c.cardBalance){ toast('Solde de la carte insuffisant — rechargez votre carte'); return; }
-  c.cardBalance -= amt;
+  const { data:newBal, error } = await sb.rpc('debit_card_checked', {p_card_id:c.id, p_amount:amt});
+  if(error){ toast('Solde de la carte insuffisant — rechargez votre carte'); return; }
+  c.cardBalance = Number(newBal);
   const id = genId('HB');
   const proofCode = String(Math.floor(1000+Math.random()*8999));
   const tx = {id,label:todayStr(),desc:'Paiement — Cafétéria',cat:'Cafétéria',amount:-amt,date:new Date()};
@@ -1457,7 +1508,6 @@ async function payCafeteria(){
   const notif = {id:genId('N'),text:'Votre commande à la cafétéria a été passée. Code de preuve : '+proofCode,date:new Date(),read:false};
   u.notifications.unshift(notif);
   await Promise.all([
-    sb.from('cards').update({card_balance:c.cardBalance}).eq('id',c.id),
     sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
     sb.from('notifications').insert({id:notif.id, account_number:u.number, text:notif.text, read:false}),
     sb.from('cafeteria_orders').insert({
@@ -1547,6 +1597,8 @@ async function lookupTransfer(){
 async function executeTransfer(){
   const u = user(); const {amount,target} = tfState;
   const id = genId('HB'); const rxId = genId('HB');
+  const { error } = await sb.rpc('transfer_money', {p_from:u.number, p_to:target.number, p_amount:amount});
+  if(error){ toast(error.message.includes('insuffisant') ? 'Solde insuffisant' : 'Le transfert a échoué — réessayez'); return; }
   u.balance -= amount;
   target.balance += amount;
   const txOut = {id,label:todayStr(),desc:'Transfert vers '+target.name,cat:'Transfert',amount:-amount,date:new Date()};
@@ -1556,8 +1608,6 @@ async function executeTransfer(){
   target.transactions.unshift(txIn);
   target.notifications.unshift(notif);
   await Promise.all([
-    sb.from('accounts').update({balance:u.balance}).eq('number',u.number),
-    sb.from('accounts').update({balance:target.balance}).eq('number',target.number),
     sb.from('transactions').insert({id:txOut.id, account_number:u.number, description:txOut.desc, category:txOut.cat, amount:txOut.amount}),
     sb.from('transactions').insert({id:txIn.id, account_number:target.number, description:txIn.desc, category:txIn.cat, amount:txIn.amount}),
     sb.from('notifications').insert({id:notif.id, account_number:target.number, text:notif.text, read:false}),
@@ -1617,13 +1667,12 @@ async function demoRecharge(method){
   if(!amt||amt<=0){ toast('Montant invalide'); return; }
   const u = user();
   const id = genId('HB');
-  u.balance += amt;
+  const { data:newBal, error } = await sb.rpc('increment_balance', {p_number:u.number, p_amount:amt});
+  if(error){ toast('La recharge a échoué — réessayez'); return; }
+  u.balance = Number(newBal);
   const tx = {id,label:todayStr(),desc:'Recharge démo — '+method,cat:'Dépôt',amount:amt,date:new Date()};
   u.transactions.unshift(tx);
-  await Promise.all([
-    sb.from('accounts').update({balance:u.balance}).eq('number',u.number),
-    sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
-  ]);
+  await sb.from('transactions').insert({id:tx.id, account_number:u.number, description:tx.desc, category:tx.cat, amount:tx.amount});
   closeModal();
   showResult('Dépôt effectué (démo)',method,amt,id);
 }
@@ -1942,39 +1991,46 @@ async function handleRequest(kind,id,approve){
       cards:[], transactions:[], notifications:[], createdAt:new Date(data.created_at),
     };
   }
+  const nowIso = new Date().toISOString();
   if(approve){
     if(kind==='Recharge'){
-      acc.balance += req.amount;
+      const { data:newBal, error } = await sb.rpc('increment_balance', {p_number:acc.number, p_amount:req.amount});
+      if(error){ toast("Échec de l'approbation — réessayez"); return; }
+      acc.balance = Number(newBal);
       const tx = {id:genId('HB'),label:todayStr(),desc:'Recharge '+req.method+' approuvée',cat:'Dépôt',amount:req.amount,date:new Date()};
       acc.transactions.unshift(tx);
       const notif = {id:genId('N'),text:`Votre recharge de ${fmt(req.amount)} a été approuvée.`,date:new Date(),read:false};
       acc.notifications.unshift(notif);
       await Promise.all([
-        sb.from('accounts').update({balance:acc.balance}).eq('number',acc.number),
         sb.from('transactions').insert({id:tx.id, account_number:acc.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
         sb.from('notifications').insert({id:notif.id, account_number:acc.number, text:notif.text, read:false}),
       ]);
     } else {
-      if(acc.balance < req.total){ toast('Solde du compte insuffisant, refus automatique'); req.status='rejected'; await sb.from(table).update({status:'rejected'}).eq('id',id); renderRoot(); return; }
-      acc.balance -= req.total;
+      const { data:newBal, error } = await sb.rpc('debit_balance_checked', {p_number:acc.number, p_amount:req.total});
+      if(error){
+        toast('Solde du compte insuffisant, refus automatique');
+        req.status='rejected'; req.resolvedAt=nowIso;
+        await sb.from(table).update({status:'rejected', resolved_at:nowIso}).eq('id',id);
+        renderRoot(); return;
+      }
+      acc.balance = Number(newBal);
       const tx = {id:genId('HB'),label:todayStr(),desc:'Retrait approuvé',cat:'Retrait',amount:-req.total,date:new Date()};
       acc.transactions.unshift(tx);
       const notif = {id:genId('N'),text:`Votre retrait de ${fmt(req.amount)} a été approuvé.`,date:new Date(),read:false};
       acc.notifications.unshift(notif);
       await Promise.all([
-        sb.from('accounts').update({balance:acc.balance}).eq('number',acc.number),
         sb.from('transactions').insert({id:tx.id, account_number:acc.number, description:tx.desc, category:tx.cat, amount:tx.amount}),
         sb.from('notifications').insert({id:notif.id, account_number:acc.number, text:notif.text, read:false}),
       ]);
     }
-    req.status='approved';
-    await sb.from(table).update({status:'approved'}).eq('id',id);
+    req.status='approved'; req.resolvedAt=nowIso;
+    await sb.from(table).update({status:'approved', resolved_at:nowIso}).eq('id',id);
   } else {
-    req.status='rejected';
+    req.status='rejected'; req.resolvedAt=nowIso;
     const notif = {id:genId('N'),text:`Votre demande de ${kind.toLowerCase()} (${fmt(req.amount)}) a été refusée.`,date:new Date(),read:false};
     acc.notifications.unshift(notif);
     await Promise.all([
-      sb.from(table).update({status:'rejected'}).eq('id',id),
+      sb.from(table).update({status:'rejected', resolved_at:nowIso}).eq('id',id),
       sb.from('notifications').insert({id:notif.id, account_number:acc.number, text:notif.text, read:false}),
     ]);
   }
@@ -2258,9 +2314,6 @@ function renderAuthOrParent(){
 
 async function boot(){
   renderRoot();
-  try{ await loadFromSupabase(); }catch(e){ console.error('Supabase load failed', e); toast('Connexion au serveur impossible — mode hors-ligne'); }
-  renderRoot();
-  startRealtime();
 }
 function playShineSound(durationMs){
   try{

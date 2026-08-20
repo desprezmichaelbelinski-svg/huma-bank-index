@@ -578,7 +578,7 @@ async function loadFromSupabase(){
     sb.from('cafeteria_products').select('*').eq('status','disponible'),
     sb.from('daily_menu').select('*'),
   ]);
-  const todayWd = (()=>{ const d=new Date().getDay(); return d>=1&&d<=6?d:null; })();
+  const todayWd = (()=>{ const d=new Date().getDay(); return d>=1&&d<=5?d:null; })();
   const todayProductIds = new Set((menuRes.data||[]).filter(m=>m.weekday===todayWd).map(m=>m.product_id));
   CAFETERIA_MENU_TODAY.length=0;
   (prodRes.data||[]).forEach(p=>{ if(todayProductIds.has(p.id)) CAFETERIA_MENU_TODAY.push({id:p.id,name:p.name,emoji:p.emoji,category:p.category,price:Number(p.price)}); });

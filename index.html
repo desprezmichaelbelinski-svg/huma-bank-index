@@ -650,8 +650,12 @@ async function createAccount({nom,prenom,genre,password,role,classe}){
     notifications: [],
     createdAt: new Date(),
   };
+  const { error } = await sb.from('accounts').insert({number,nom,prenom,genre:acc.genre,password:acc.password,role,classe:acc.classe,balance:0,status:'active',account_type:'courant'});
+  if(error){ console.error('Account insert failed', error); return null; }
+  // Vérification : on relit le compte pour confirmer qu'il est vraiment enregistré
+  const { data:confirm } = await sb.from('accounts').select('number').eq('number',number).maybeSingle();
+  if(!confirm){ return null; }
   ACCOUNTS[number] = acc;
-  await sb.from('accounts').insert({number,nom,prenom,genre:acc.genre,password:acc.password,role,classe:acc.classe,balance:0,status:'active',account_type:'courant'});
   return acc;
 }
 
@@ -927,18 +931,28 @@ async function finalizeParentAccount(){
     relation:p.relation, eleveNom:p.eleve_nom, elevePrenom:p.eleve_prenom,
     cards:[], transactions:[], notifications:[], createdAt:new Date(),
   };
+  const { error:insErr } = await sb.from('accounts').insert({
+    number, nom, prenom, genre:'', password:pass, role:'parent', classe:p.classe,
+    balance:0, status:'active', account_type:'courant',
+    relation:p.relation, father_nom:p.father_nom, father_prenom:p.father_prenom,
+    mother_nom:p.mother_nom, mother_prenom:p.mother_prenom,
+    aunt_nom:p.aunt_nom, aunt_prenom:p.aunt_prenom, uncle_nom:p.uncle_nom, uncle_prenom:p.uncle_prenom,
+    eleve_nom:p.eleve_nom, eleve_prenom:p.eleve_prenom,
+  });
+  if(insErr){
+    console.error('Parent account insert failed', insErr);
+    toast("La création du compte a échoué — vérifiez votre connexion et réessayez.");
+    startParentCountdown();
+    return;
+  }
+  const { data:confirm } = await sb.from('accounts').select('number').eq('number',number).maybeSingle();
+  if(!confirm){
+    toast("La création du compte a échoué — vérifiez votre connexion et réessayez.");
+    startParentCountdown();
+    return;
+  }
   ACCOUNTS[number] = acc;
-  await Promise.all([
-    sb.from('accounts').insert({
-      number, nom, prenom, genre:'', password:pass, role:'parent', classe:p.classe,
-      balance:0, status:'active', account_type:'courant',
-      relation:p.relation, father_nom:p.father_nom, father_prenom:p.father_prenom,
-      mother_nom:p.mother_nom, mother_prenom:p.mother_prenom,
-      aunt_nom:p.aunt_nom, aunt_prenom:p.aunt_prenom, uncle_nom:p.uncle_nom, uncle_prenom:p.uncle_prenom,
-      eleve_nom:p.eleve_nom, eleve_prenom:p.eleve_prenom,
-    }),
-    sb.from('parent_pending').update({status:'used'}).eq('code',p.code),
-  ]);
+  await sb.from('parent_pending').update({status:'used'}).eq('code',p.code);
   auth.createdNumber = number; auth.showCode=false; auth.parentPending=null;
   auth.view='success'; renderRoot();
 }
@@ -957,10 +971,15 @@ function submitRegistration(){
   auth.view='loading'; renderRoot();
   setTimeout(async ()=>{
     const acc = await createAccount({nom:auth.form.nom,prenom:auth.form.prenom,genre:auth.form.genre,password:auth.form.password,role:auth.role,classe:auth.form.classe});
+    if(!acc){
+      toast("La création du compte a échoué — vérifiez votre connexion et réessayez.");
+      auth.view='form'; renderRoot();
+      return;
+    }
     auth.createdNumber = acc.number;
     auth.showCode = false;
     auth.view='success'; renderRoot();
-  }, 3000);
+  }, 1200);
 }
 
 function renderAuthLoading(){
@@ -1676,10 +1695,13 @@ async function demoRecharge(method){
   closeModal();
   showResult('Dépôt effectué (démo)',method,amt,id);
 }
+let submitLock = false;
 async function submitRecharge(method){
+  if(submitLock) return;
   const amt = parseFloat(document.getElementById('rc-amt').value);
   const ref = document.getElementById('rc-ref').value.trim();
   if(!amt||amt<=0){ toast('Montant invalide'); return; }
+  submitLock = true;
   const u = user();
   const id = genId('RC');
   const req = {id,accountNumber:u.number,name:u.name,method,amount:amt,ref:ref||'—',status:'pending',date:new Date()};
@@ -1690,6 +1712,7 @@ async function submitRecharge(method){
     sb.from('recharge_requests').insert({id, account_number:u.number, method, amount:amt, ref:req.ref, status:'pending'}),
     sb.from('notifications').insert({id:notif.id, account_number:u.number, text:notif.text, read:false}),
   ]);
+  submitLock = false;
   closeModal();
   openModal(`<div class="result-wrap"><div class="result-check">${animatedCheck(30)}</div><h2>Demande envoyée</h2><p>Référence : ${id}. En attente de validation par l'administration.</p><button class="btn-primary" onclick="closeModal();renderRoot()">OK</button></div>`);
 }
@@ -1712,11 +1735,13 @@ function updateWdFee(){
   document.getElementById('wd-total-line').innerHTML = money(amt+fee);
 }
 async function submitWithdraw(){
+  if(submitLock) return;
   const amt = parseFloat(document.getElementById('wd-amt').value);
   if(!amt||amt<=0){ toast('Montant invalide'); return; }
   const u = user();
   const fee = withdrawFee(amt);
   if(amt+fee>u.balance){ toast('Solde insuffisant pour ce retrait'); return; }
+  submitLock = true;
   const id = genId('WD');
   WITHDRAW_REQUESTS.unshift({id,accountNumber:u.number,name:u.name,amount:amt,fee,total:amt+fee,status:'pending',date:new Date()});
   const notif = {id:genId('N'),text:`Votre demande de retrait de ${fmt(amt)} a été envoyée à l'administration.`,date:new Date(),read:false};
@@ -1725,6 +1750,7 @@ async function submitWithdraw(){
     sb.from('withdraw_requests').insert({id, account_number:u.number, amount:amt, fee, total:amt+fee, status:'pending'}),
     sb.from('notifications').insert({id:notif.id, account_number:u.number, text:notif.text, read:false}),
   ]);
+  submitLock = false;
   closeModal();
   openModal(`<div class="result-wrap"><div class="result-check">${animatedCheck(30)}</div><h2>Demande envoyée</h2><p>Référence : ${id}. Aucun montant n'a encore été débité.</p><button class="btn-primary" onclick="closeModal();renderRoot()">OK</button></div>`);
 }
@@ -2315,27 +2341,6 @@ function renderAuthOrParent(){
 async function boot(){
   renderRoot();
 }
-function playShineSound(durationMs){
-  try{
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new Ctx();
-    const now = ctx.currentTime;
-    const dur = durationMs/1000;
-    const osc1 = ctx.createOscillator(); osc1.type='sine'; osc1.frequency.setValueAtTime(660, now);
-    osc1.frequency.linearRampToValueAtTime(880, now+dur*0.5);
-    osc1.frequency.linearRampToValueAtTime(660, now+dur);
-    const osc2 = ctx.createOscillator(); osc2.type='sine'; osc2.frequency.setValueAtTime(990, now);
-    osc2.frequency.linearRampToValueAtTime(1320, now+dur*0.5);
-    osc2.frequency.linearRampToValueAtTime(990, now+dur);
-    const gain = ctx.createGain(); gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.12, now+dur*0.25);
-    gain.gain.linearRampToValueAtTime(0.12, now+dur*0.75);
-    gain.gain.linearRampToValueAtTime(0, now+dur);
-    osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
-    osc1.start(now); osc2.start(now);
-    osc1.stop(now+dur); osc2.stop(now+dur);
-  }catch(e){ /* audio non disponible sans interaction utilisateur — silencieux */ }
-}
 window.addEventListener('load', ()=>{
   boot();
   setTimeout(()=>{
@@ -2346,7 +2351,6 @@ window.addEventListener('load', ()=>{
   }, 6000);
   setTimeout(()=>{
     document.getElementById('sp-shine').classList.add('sp-sweep');
-    playShineSound(3000);
   }, 10000);
   setTimeout(()=>{
     const sp = document.getElementById('splash');

@@ -21,6 +21,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
 :root{
+  --gold:#C79B3B;
+  --gold-light:#E8C468;
   --navy-950:#040B18;
   --navy-900:#081831;
   --navy-800:#0C2350;
@@ -372,6 +374,7 @@ input[type=range]{width:100%;accent-color:var(--navy-700);}
 
 .empty-state{text-align:center;padding:50px 20px;color:var(--muted);}
 .empty-state .es-ic{width:60px;height:60px;border-radius:50%;background:var(--navy-100);color:var(--navy-700);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+.empty-state .es-ic-ring{box-shadow:0 0 0 3px var(--navy-50), 0 0 0 4.5px var(--gold-light);}
 .dark .empty-state .es-ic{color:#8FA6F5;}
 .empty-state h4{margin:0 0 6px;color:var(--ink);}
 .empty-state p{margin:0;font-size:12.5px;}
@@ -418,6 +421,16 @@ input[type=range]{width:100%;accent-color:var(--navy-700);}
 .huma-loader-wrap p{color:var(--muted);font-size:13.5px;margin:0;font-weight:600;}
 
 /* GUIDE INSTALLATION iOS */
+/* MESSAGES */
+.msg-thread{display:flex;flex-direction:column;gap:8px;min-height:200px;padding-bottom:8px;}
+.msg-bubble{max-width:80%;padding:10px 14px;border-radius:16px;font-size:13.5px;line-height:1.5;}
+.msg-bubble p{margin:0;white-space:pre-wrap;word-break:break-word;}
+.msg-bubble small{display:block;margin-top:4px;font-size:10px;opacity:.65;}
+.msg-in{align-self:flex-start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:4px;}
+.msg-out{align-self:flex-end;background:var(--navy-800);color:#fff;border-bottom-right-radius:4px;}
+.msg-input-row{position:sticky;bottom:0;display:flex;gap:8px;background:var(--navy-50);padding:10px 0 4px;}
+.msg-input-row input{flex:1;border:1px solid var(--line);background:var(--surface);border-radius:24px;padding:12px 16px;font-size:14px;outline:none;color:var(--ink);}
+
 .ios-install-step{display:flex;align-items:flex-start;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px;}
 .ios-install-step .ios-step-num{width:26px;height:26px;border-radius:50%;background:var(--navy-800);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;flex-shrink:0;}
 .ios-install-step p{margin:0;font-size:13.5px;line-height:1.5;padding-top:2px;}
@@ -723,11 +736,12 @@ async function loadCafeteriaMenu(){
 }
 // Charge UNIQUEMENT le compte connecté (pas toute la table — indispensable à 20 000+ comptes)
 async function loadMyAccountData(number){
-  const [accRes, cardRes, txRes, notifRes] = await Promise.all([
+  const [accRes, cardRes, txRes, notifRes, msgRes] = await Promise.all([
     sb.from('accounts').select('*').eq('number',number).maybeSingle(),
     sb.from('cards').select('*').eq('account_number',number),
     sb.from('transactions').select('*').eq('account_number',number).order('created_at',{ascending:false}).limit(200),
     sb.from('notifications').select('*').eq('account_number',number).order('created_at',{ascending:false}).limit(100),
+    sb.from('support_messages').select('*').eq('account_number',number).order('created_at',{ascending:true}).limit(200),
   ]);
   const a = accRes.data;
   if(!a) return null;
@@ -735,40 +749,52 @@ async function loadMyAccountData(number){
     number:a.number, nom:a.nom, prenom:a.prenom, genre:a.genre, password:a.password, role:a.role, classe:a.classe,
     name:a.prenom+' '+a.nom, balance:Number(a.balance), status:a.status, accountType:a.account_type,
     eleveNom:a.eleve_nom, elevePrenom:a.eleve_prenom, relation:a.relation,
-    cards:[], transactions:[], notifications:[], createdAt:new Date(a.created_at),
+    cards:[], transactions:[], notifications:[], messages:[], createdAt:new Date(a.created_at),
   };
   (cardRes.data||[]).forEach(c=>{ acc.cards.push({id:c.id, holder:c.holder, last4:c.last4, full:c.full_number, cvv:c.cvv, exp:c.exp, frozen:c.frozen, cardBalance:Number(c.card_balance)}); });
   (txRes.data||[]).forEach(t=>{ const d=new Date(t.created_at); acc.transactions.push({id:t.id, desc:t.description, cat:t.category, amount:Number(t.amount), date:d, label:todayStr2(d)}); });
   (notifRes.data||[]).forEach(n=>{ acc.notifications.push({id:n.id, text:n.text, read:n.read, date:new Date(n.created_at)}); });
+  (msgRes.data||[]).forEach(m=>{ acc.messages.push({id:m.id, sender:m.sender, body:m.body, readByUser:m.read_by_user, readByAdmin:m.read_by_admin, date:new Date(m.created_at)}); });
   ACCOUNTS[number] = acc;
   return acc;
 }
 // Réservé au rôle Direction : chargement borné pour son mini-panel intégré
 // (la gestion complète des 20 000 comptes se fait dans le vrai dashboard admin séparé)
 async function loadDirectionData(){
-  const [accRes, rcRes, wdRes] = await Promise.all([
+  const [accRes, rcRes, wdRes, msgRes] = await Promise.all([
     sb.from('accounts').select('*').neq('role','direction').order('created_at',{ascending:false}).limit(300),
     sb.from('recharge_requests').select('*').order('created_at',{ascending:false}).limit(100),
     sb.from('withdraw_requests').select('*').order('created_at',{ascending:false}).limit(100),
+    sb.from('support_messages').select('*').order('created_at',{ascending:true}).limit(500),
   ]);
   (accRes.data||[]).forEach(a=>{
     if(ACCOUNTS[a.number]) return; // ne pas écraser le compte déjà chargé en détail
     ACCOUNTS[a.number] = {
       number:a.number, nom:a.nom, prenom:a.prenom, role:a.role, classe:a.classe,
       name:a.prenom+' '+a.nom, balance:Number(a.balance), status:a.status, accountType:a.account_type,
-      cards:[], transactions:[], notifications:[], createdAt:new Date(a.created_at),
+      cards:[], transactions:[], notifications:[], messages:[], createdAt:new Date(a.created_at),
     };
   });
   RECHARGE_REQUESTS.length=0;
   (rcRes.data||[]).forEach(r=>{
     const acc=ACCOUNTS[r.account_number];
-    RECHARGE_REQUESTS.push({id:r.id, accountNumber:r.account_number, name:acc?acc.name:r.account_number, method:r.method, amount:Number(r.amount), ref:r.ref, status:r.status, date:new Date(r.created_at)});
+    RECHARGE_REQUESTS.push({id:r.id, accountNumber:r.account_number, name:acc?acc.name:r.account_number, method:r.method, amount:Number(r.amount), ref:r.ref, proofUrl:r.proof_image_url, status:r.status, date:new Date(r.created_at)});
   });
   WITHDRAW_REQUESTS.length=0;
   (wdRes.data||[]).forEach(r=>{
     const acc=ACCOUNTS[r.account_number];
     WITHDRAW_REQUESTS.push({id:r.id, accountNumber:r.account_number, name:acc?acc.name:r.account_number, amount:Number(r.amount), fee:Number(r.fee), total:Number(r.total), status:r.status, date:new Date(r.created_at)});
   });
+  ALL_MESSAGE_THREADS.length=0;
+  const byAcc = {};
+  (msgRes.data||[]).forEach(m=>{ (byAcc[m.account_number]=byAcc[m.account_number]||[]).push(m); });
+  Object.entries(byAcc).forEach(([num,msgs])=>{
+    const acc = ACCOUNTS[num];
+    const last = msgs[msgs.length-1];
+    const unread = msgs.filter(m=>m.sender==='user' && !m.read_by_admin).length;
+    ALL_MESSAGE_THREADS.push({accountNumber:num, name:acc?acc.name:num, lastBody:last.body, lastDate:new Date(last.created_at), unread, messages:msgs.map(m=>({id:m.id, sender:m.sender, body:m.body, date:new Date(m.created_at)}))});
+  });
+  ALL_MESSAGE_THREADS.sort((a,b)=>b.lastDate-a.lastDate);
 }
 function todayStr2(d){
   const days = Math.floor((Date.now()-d.getTime())/86400000);
@@ -797,6 +823,7 @@ async function syncDirectionRequests(){
   }, 220);
 }
 let realtimeChannel = null, directionChannel = null;
+const ALL_MESSAGE_THREADS = [];
 function startRealtime(){
   const num = state.session;
   if(!num) return;
@@ -806,6 +833,7 @@ function startRealtime(){
     .on('postgres_changes', {event:'*', schema:'public', table:'cards', filter:`account_number=eq.${num}`}, syncMyAccount)
     .on('postgres_changes', {event:'*', schema:'public', table:'transactions', filter:`account_number=eq.${num}`}, syncMyAccount)
     .on('postgres_changes', {event:'*', schema:'public', table:'notifications', filter:`account_number=eq.${num}`}, syncMyAccount)
+    .on('postgres_changes', {event:'*', schema:'public', table:'support_messages', filter:`account_number=eq.${num}`}, syncMyAccount)
     .subscribe();
   const u = user();
   if(u && u.role==='direction'){
@@ -813,6 +841,7 @@ function startRealtime(){
     directionChannel = sb.channel('direction-requests')
       .on('postgres_changes', {event:'*', schema:'public', table:'recharge_requests'}, syncDirectionRequests)
       .on('postgres_changes', {event:'*', schema:'public', table:'withdraw_requests'}, syncDirectionRequests)
+      .on('postgres_changes', {event:'*', schema:'public', table:'support_messages'}, syncDirectionRequests)
       .subscribe();
   }
 }
@@ -850,6 +879,7 @@ function renderAuth(){
   if(auth.view==='loading') return renderAuthLoading();
   if(auth.view==='success') return renderAuthSuccess();
   if(auth.view==='login') return renderAuthLogin();
+  if(auth.view==='forgot') return renderForgotPassword();
   return renderAuthRole();
 }
 
@@ -1084,14 +1114,43 @@ function renderAuthLogin(){
     </div>
     ${auth.loginErr?`<p style="color:#F3A6A6;font-size:12.5px;margin-top:-6px;">${auth.loginErr}</p>`:''}
     <button class="btn-primary" onclick="doLogin()">Se connecter</button>
-    <div style="margin-top:26px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;color:#B9C6EE;font-size:11.5px;line-height:1.8;">
+    <button class="btn-secondary" style="background:transparent;border:none;color:#B9C6EE;margin-top:8px;" onclick="auth.view='forgot';auth.forgotSent=false;renderRoot()">Mot de passe oublié ?</button>
+    <div style="margin-top:18px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;color:#B9C6EE;font-size:11.5px;line-height:1.8;">
       <b style="color:#fff;">Comptes de démonstration</b><br>
       Direction : 000001 / admin123<br>
       Professeur : 550284 / 1234<br>
-      Personnel : 770245 / 1234<br>
       Élève : 402851 (sans mot de passe)
     </div>
   </div>`;
+}
+function renderForgotPassword(){
+  if(auth.forgotSent){
+    return `
+    <div class="login-wrap" style="align-items:center;text-align:center;">
+      <div class="result-check" style="margin:30px auto 18px;color:#fff;">${animatedCheck(32)}</div>
+      <h1 class="login-hero" style="font-size:20px;">Demande envoyée</h1>
+      <p class="login-sub">La direction va traiter votre demande et vous communiquera un nouveau mot de passe en personne.</p>
+      <button class="btn-secondary" onclick="auth.view='role';renderRoot()">Retour</button>
+    </div>`;
+  }
+  return `
+  <div class="login-wrap">
+    <button class="icon-btn" style="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.2);color:#fff;margin-bottom:18px;" onclick="auth.view='login';renderRoot()">${icon('back',18)}</button>
+    <div class="login-brand"><div class="mark">H</div><span>HUMA BANK</span></div>
+    <h1 class="login-hero" style="font-size:22px;">Mot de passe oublié</h1>
+    <p class="login-sub">Entrez votre numéro de compte — une demande sera envoyée à la direction, qui vous communiquera un nouveau mot de passe en personne, pour des raisons de sécurité.</p>
+    <div class="field"><label style="color:#B9C6EE;">Numéro de compte (6 chiffres)</label><input id="fg-num" maxlength="6" placeholder="••••••"></div>
+    ${auth.forgotErr?`<p style="color:#F3A6A6;font-size:12.5px;margin-top:-6px;">${auth.forgotErr}</p>`:''}
+    <button class="btn-primary" onclick="submitForgotPassword()">Envoyer la demande</button>
+  </div>`;
+}
+async function submitForgotPassword(){
+  const num = document.getElementById('fg-num').value.trim();
+  if(num.length!==6){ auth.forgotErr='Le numéro doit contenir 6 chiffres.'; renderRoot(); return; }
+  const { data } = await sb.from('accounts').select('number').eq('number',num).maybeSingle();
+  if(!data){ auth.forgotErr='Numéro de compte introuvable.'; renderRoot(); return; }
+  await sb.from('password_reset_requests').insert({id:genId('PR'), account_number:num, status:'pending'});
+  auth.forgotSent = true; renderRoot();
 }
 function logSecurity(accountNumber,userName,action,result){
   sb.from('security_log').insert({id:genId('SEC'), account_number:accountNumber||null, user_name:userName||'Inconnu', action, device:navigator.userAgent.slice(0,60), result});
@@ -1101,6 +1160,9 @@ async function doLogin(){
   const pass = document.getElementById('l-pass').value;
   if(num.length!==6){ auth.loginErr='Le numéro doit contenir 6 chiffres.'; renderRoot(); return; }
   auth.loginErr=''; auth.loginBusy=true; renderRoot();
+  const since = new Date(Date.now()-15*60*1000).toISOString();
+  const { count } = await sb.from('security_log').select('*',{count:'exact',head:true}).eq('account_number',num).eq('result','fail').gte('created_at',since);
+  if(count>=5){ auth.loginBusy=false; auth.loginErr='Trop de tentatives échouées. Réessayez dans 15 minutes.'; renderRoot(); return; }
   const { data } = await sb.from('accounts').select('*').eq('number',num).maybeSingle();
   auth.loginBusy=false;
   if(!data){ auth.loginErr='Numéro de compte introuvable.'; logSecurity(num,null,'Tentative de connexion — compte introuvable','fail'); renderRoot(); return; }
@@ -1121,11 +1183,26 @@ async function loginAs(number){
   if(u.role==='direction'){ await loadDirectionData(); }
   renderRoot();
   startRealtime();
+  startInactivityWatch();
   try{
     if(!localStorage.getItem('huma_index_tour_seen')) setTimeout(()=>startTour(TOUR_INDEX,'huma_index_tour_seen'),600);
   }catch(e){}
 }
+let inactivityTimer = null;
+const INACTIVITY_LIMIT_MS = 5*60*1000; // 5 minutes
+function startInactivityWatch(){
+  const reset = () => {
+    clearTimeout(inactivityTimer);
+    if(!state.session) return;
+    inactivityTimer = setTimeout(()=>{
+      if(state.session){ toast('Session fermée après 5 minutes d’inactivité'); logout(); }
+    }, INACTIVITY_LIMIT_MS);
+  };
+  ['click','touchstart','keydown','scroll'].forEach(ev=>document.addEventListener(ev, reset, {passive:true}));
+  reset();
+}
 function logout(){
+  clearTimeout(inactivityTimer);
   if(realtimeChannel) sb.removeChannel(realtimeChannel);
   if(directionChannel) sb.removeChannel(directionChannel);
   realtimeChannel=null; directionChannel=null;
@@ -1152,9 +1229,10 @@ function renderShell(){
   if(LOCKED_ROLES.includes(u.role)) return renderAccountLocked(u);
   const admin = isAdmin(u);
   const unread = (u.notifications||[]).filter(n=>!n.read).length;
+  const unreadMsg = (u.messages||[]).filter(m=>m.sender==='admin' && !m.readByUser).length;
   const navItems = admin
-    ? [['dashboard','home','Dashboard'],['demandes','wallet','Demandes'],['comptes','users','Comptes'],['transactions','trend','Transactions']]
-    : [['accueil','home','Accueil'],['cartes','card','Cartes'],['paiements','building','Paiements'],['transferts','send','Transferts'],['finances','chart','Finances']];
+    ? [['dashboard','home','Dashboard'],['demandes','wallet','Demandes'],['comptes','users','Comptes'],['transactions','trend','Transactions'],['messages','send','Messages']]
+    : [['accueil','home','Accueil'],['cartes','card','Cartes'],['paiements','building','Paiements'],['transferts','send','Transferts'],['finances','chart','Finances'],['messages','bell','Messages']];
   const activeScreen = admin ? state.adminScreen : state.screen;
   const initials = (u.prenom[0]||'')+(u.nom[0]||'');
 
@@ -1163,8 +1241,9 @@ function renderShell(){
     <nav class="bottomnav">
       <div class="nav-brand"><div class="nb-mark">H</div><span class="nb-text">HUMA BANK</span></div>
       ${navItems.map(([id,ic,label])=>`
-        <button class="nav-btn ${activeScreen===id?'active':''}" onclick="goScreen('${id}')">
+        <button class="nav-btn ${activeScreen===id?'active':''}" onclick="goScreen('${id}')" style="position:relative;">
           ${icon(ic,21)}<span>${label}</span>
+          ${id==='messages'&&unreadMsg?`<span style="position:absolute;top:2px;right:calc(50% - 20px);width:8px;height:8px;border-radius:50%;background:var(--neg);"></span>`:''}
         </button>`).join('')}
     </nav>
     <div class="content-col">
@@ -1237,6 +1316,7 @@ function renderScreen(){
       case 'demandes': return renderAdminDemandes();
       case 'comptes': return renderAdminComptes();
       case 'transactions': return renderAdminTransactions();
+      case 'messages': return renderMessages();
       case 'profil': return renderProfil();
       default: return renderAdminDashboard();
     }
@@ -1247,6 +1327,7 @@ function renderScreen(){
     case 'paiements': return renderPaiements();
     case 'transferts': return renderTransferts();
     case 'finances': return renderFinances();
+    case 'messages': return renderMessages();
     case 'profil': return renderProfil();
     case 'abonnement': return renderAbonnement();
     case 'installios': return renderInstallIOS();
@@ -1280,7 +1361,7 @@ function renderAccueil(){
 
   <div class="section-title">Dernières transactions<span class="link" onclick="goScreen('finances')">Voir tout</span></div>
   <div class="list-card">
-    ${u.transactions.slice(0,4).map(txRow).join('') || `<div class="empty-state" style="padding:26px;"><p>Aucune transaction pour le moment.</p></div>`}
+    ${u.transactions.slice(0,4).map(txRow).join('') || emptyState('trend','Aucune transaction','Vos mouvements récents apparaîtront ici.')}
   </div>
 
   <div class="mini-chart-card">
@@ -1338,6 +1419,13 @@ function drawTxEntrances(){
 }
 
 const CAT_ICON = {'Cantine':'food','Cafétéria':'food','Transport':'building','Livres':'book','Transfert':'send','Reçu':'arrowDown','Frais scolaires':'building','Dépôt':'wallet','Carte':'card','Retrait':'wallet'};
+function emptyState(iconName, title, msg){
+  return `<div class="empty-state">
+    <div class="es-ic es-ic-ring">${icon(iconName,24)}</div>
+    <h4>${title}</h4>
+    ${msg?`<p>${msg}</p>`:''}
+  </div>`;
+}
 function txRow(t){
   const pos = t.amount>0;
   return `<div class="tx-row">
@@ -1538,7 +1626,7 @@ function renderPaiements(){
   </div>
   <div class="section-title">Historique des paiements</div>
   <div class="list-card">
-    ${u.transactions.filter(t=>t.cat==='Cafétéria').slice(0,6).map(txRow).join('') || `<div class="empty-state" style="padding:26px;"><p>Aucun paiement récent.</p></div>`}
+    ${u.transactions.filter(t=>t.cat==='Cafétéria').slice(0,6).map(txRow).join('') || emptyState('food','Aucun paiement','Vos achats à la cafétéria apparaîtront ici.')}
   </div>
   `;
 }
@@ -1635,7 +1723,7 @@ function renderTransferts(){
     <div class="field"><input id="tf-amt" type="number" placeholder="Montant" value="${tfState.amount}"></div>
     <button class="btn-primary" onclick="lookupTransfer()">Continuer</button>
     <div class="section-title">Historique</div>
-    <div class="list-card">${u.transactions.filter(t=>t.cat==='Transfert').slice(0,6).map(txRow).join('')||`<div class="empty-state" style="padding:26px;"><p>Aucun transfert récent.</p></div>`}</div>
+    <div class="list-card">${u.transactions.filter(t=>t.cat==='Transfert').slice(0,6).map(txRow).join('')||emptyState('send','Aucun transfert','Vos envois et réceptions d\'argent apparaîtront ici.')}</div>
   ` : `
     <div class="section-title" style="margin-top:16px;">Recevoir de l'argent</div>
     <div class="code-box">
@@ -1753,10 +1841,28 @@ function openRechargeMethod(method){
     </div>
     <p style="color:var(--muted);font-size:12px;text-align:center;margin-top:-6px;">Effectuez le dépôt sur ce numéro, puis renseignez les informations ci-dessous.</p>`}
     <div class="field" style="margin-top:16px;"><label>Montant déposé</label><input id="rc-amt" type="number" placeholder="0"></div>
-    <div class="field"><label>Référence / preuve du dépôt</label><input id="rc-ref" placeholder="Ex. Réf. transaction ${method}"></div>
+    <div class="field"><label>Numéro de la transaction ${method}</label><input id="rc-ref" placeholder="Ex. TX-8842019"></div>
+    <div class="field">
+      <label>Capture d'écran de la transaction (obligatoire)</label>
+      <input id="rc-proof" type="file" accept="image/*" style="display:none;" onchange="onProofSelected(this)">
+      <button type="button" class="btn-secondary" id="rc-proof-btn" onclick="document.getElementById('rc-proof').click()">${icon('receipt',15)} Choisir une capture d'écran</button>
+      <div id="rc-proof-preview" style="margin-top:10px;"></div>
+    </div>
     <button class="btn-primary" onclick="submitRecharge('${method}')">Envoyer la demande</button>
     <button class="btn-secondary" style="border-color:var(--pos);color:var(--pos);" onclick="demoRecharge('${method}')">${icon('check',15)} Démo — ajouter instantanément</button>
   `));
+}
+let rcProofFile = null;
+function onProofSelected(input){
+  rcProofFile = input.files[0] || null;
+  const preview = document.getElementById('rc-proof-preview');
+  const btn = document.getElementById('rc-proof-btn');
+  if(rcProofFile){
+    btn.innerHTML = `${icon('check',15)} ${rcProofFile.name}`;
+    const reader = new FileReader();
+    reader.onload = e => { preview.innerHTML = `<img src="${e.target.result}" style="max-width:100%;border-radius:12px;border:1px solid var(--line);">`; };
+    reader.readAsDataURL(rcProofFile);
+  }
 }
 async function demoRecharge(method){
   const amt = parseFloat(document.getElementById('rc-amt').value);
@@ -1779,18 +1885,28 @@ async function submitRecharge(method){
   const amt = parseFloat(document.getElementById('rc-amt').value);
   const ref = document.getElementById('rc-ref').value.trim();
   if(!amt||amt<=0){ toast('Montant invalide'); return; }
+  if(!ref){ toast('Veuillez indiquer le numéro de la transaction'); return; }
+  if(!rcProofFile){ toast("Veuillez joindre une capture d'écran de la transaction"); return; }
   submitLock = true;
   showLoader('Envoi de la demande…');
   const u = user();
   const id = genId('RC');
-  const req = {id,accountNumber:u.number,name:u.name,method,amount:amt,ref:ref||'—',status:'pending',date:new Date()};
+  let proofUrl = null;
+  const ext = (rcProofFile.name.split('.').pop()||'jpg').toLowerCase();
+  const path = `${u.number}/${id}.${ext}`;
+  const { error: upErr } = await sb.storage.from('recharge-proofs').upload(path, rcProofFile, {upsert:true});
+  if(upErr){ submitLock=false; closeModal(); toast("L'envoi de la capture d'écran a échoué — réessayez"); return; }
+  const { data: pub } = sb.storage.from('recharge-proofs').getPublicUrl(path);
+  proofUrl = pub.publicUrl;
+  const req = {id,accountNumber:u.number,name:u.name,method,amount:amt,ref,status:'pending',date:new Date()};
   RECHARGE_REQUESTS.unshift(req);
   const notif = {id:genId('N'),text:`Votre demande de recharge ${method} de ${fmt(amt)} a été envoyée à l'administration.`,date:new Date(),read:false};
   u.notifications.unshift(notif);
   await Promise.all([
-    sb.from('recharge_requests').insert({id, account_number:u.number, method, amount:amt, ref:req.ref, status:'pending'}),
+    sb.from('recharge_requests').insert({id, account_number:u.number, method, amount:amt, ref:req.ref, proof_image_url:proofUrl, status:'pending'}),
     sb.from('notifications').insert({id:notif.id, account_number:u.number, text:notif.text, read:false}),
   ]);
+  rcProofFile = null;
   submitLock = false;
   closeModal();
   openModal(`<div class="result-wrap"><div class="result-check">${animatedCheck(30)}</div><h2>Demande envoyée</h2><p>Référence : ${id}. En attente de validation par l'administration.</p><button class="btn-primary" onclick="closeModal();renderRoot()">OK</button></div>`);
@@ -1876,11 +1992,125 @@ function renderFinances(){
   <div class="list-card" style="padding:4px 15px;">
     ${catEntries.length ? catEntries.map(([cat,val],i)=>`
       <div class="cat-row"><div class="cat-dot" style="background:${catColors[i%catColors.length]}"></div><b>${cat}</b><span class="tnum">${money(-val)}</span></div>
-    `).join('') : `<div class="empty-state" style="padding:26px;"><p>Aucune dépense enregistrée.</p></div>`}
+    `).join('') : emptyState('chart','Aucune dépense','Le détail de vos dépenses par catégorie apparaîtra ici.')}
+  </div>
+  <button class="btn-secondary" style="margin-top:16px;" onclick="downloadStatement()">${icon('back',15)} Télécharger mon relevé (CSV)</button>
+  `;
+}
+function downloadStatement(){
+  const u = user();
+  const rows = [['Date','Description','Catégorie','Montant (HUMA)']];
+  u.transactions.forEach(t=>{
+    rows.push([t.date.toLocaleString('fr-FR'), t.desc, t.cat, t.amount.toFixed(2)]);
+  });
+  const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `releve-huma-bank-${u.number}-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Relevé téléchargé');
+}
+
+/* =========================================================
+   MESSAGES
+========================================================= */
+let openThreadAccount = null;
+function renderMessages(){
+  const u = user();
+  if(u.role==='direction') return renderMessagesDirection();
+  return renderMessagesUser(u);
+}
+function renderMessagesUser(u){
+  markMyMessagesRead(u);
+  return `
+  <div class="section-title" style="margin-top:16px;">Messages</div>
+  <p style="color:var(--muted);font-size:12.5px;margin:-8px 0 14px;">Écrivez directement à la direction de l'établissement.</p>
+  <div class="msg-thread" id="msg-thread">
+    ${(u.messages||[]).length===0 ? emptyState('send','Aucun message','Envoyez un message à la direction ci-dessous.') :
+      (u.messages||[]).map(m=>`
+        <div class="msg-bubble ${m.sender==='user'?'msg-out':'msg-in'}">
+          <p>${escapeHtml(m.body)}</p>
+          <small>${m.date.toLocaleString('fr-FR')}</small>
+        </div>`).join('')}
+  </div>
+  <div class="msg-input-row">
+    <input id="msg-input" placeholder="Écrire un message…" onkeydown="if(event.key==='Enter')sendUserMessage()">
+    <button class="icon-btn" onclick="sendUserMessage()">${icon('send',18)}</button>
   </div>
   `;
 }
-
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+async function sendUserMessage(){
+  const input = document.getElementById('msg-input');
+  const body = input.value.trim();
+  if(!body) return;
+  const u = user();
+  input.value='';
+  const msg = {id:genId('MSG'), sender:'user', body, readByUser:true, readByAdmin:false, date:new Date()};
+  u.messages.push(msg);
+  renderRoot();
+  await sb.from('support_messages').insert({id:msg.id, account_number:u.number, sender:'user', body, read_by_user:true, read_by_admin:false});
+}
+function markMyMessagesRead(u){
+  const toMark = (u.messages||[]).filter(m=>m.sender==='admin' && !m.readByUser);
+  if(toMark.length===0) return;
+  toMark.forEach(m=>m.readByUser=true);
+  toMark.forEach(m=>sb.from('support_messages').update({read_by_user:true}).eq('id',m.id));
+}
+function renderMessagesDirection(){
+  if(openThreadAccount){
+    const thread = ALL_MESSAGE_THREADS.find(t=>t.accountNumber===openThreadAccount);
+    if(!thread){ openThreadAccount=null; }
+    else {
+      markThreadRead(thread);
+      return `
+      <div class="section-title" style="margin-top:16px;display:flex;align-items:center;gap:10px;">
+        <button class="icon-btn" onclick="openThreadAccount=null;renderRoot()">${icon('back',16)}</button>
+        ${thread.name}
+      </div>
+      <div class="msg-thread">
+        ${thread.messages.map(m=>`
+          <div class="msg-bubble ${m.sender==='admin'?'msg-out':'msg-in'}">
+            <p>${escapeHtml(m.body)}</p>
+            <small>${m.date.toLocaleString('fr-FR')}</small>
+          </div>`).join('')}
+      </div>
+      <div class="msg-input-row">
+        <input id="msg-input" placeholder="Répondre…" onkeydown="if(event.key==='Enter')sendAdminMessage('${thread.accountNumber}')">
+        <button class="icon-btn" onclick="sendAdminMessage('${thread.accountNumber}')">${icon('send',18)}</button>
+      </div>`;
+    }
+  }
+  return `
+  <div class="section-title" style="margin-top:16px;">Messages</div>
+  <div class="list-card">
+    ${ALL_MESSAGE_THREADS.length===0 ? emptyState('send','Aucun message',"Les messages envoyés par l'établissement apparaîtront ici.") :
+      ALL_MESSAGE_THREADS.map(t=>`
+        <div class="tx-row" style="cursor:pointer;" onclick="openThreadAccount='${t.accountNumber}';renderRoot()">
+          <div class="tx-icn" style="background:${colorFor(t.accountNumber)};color:#fff;">${t.name[0]}</div>
+          <div class="tx-mid"><p class="tx-desc">${t.name}${t.unread?` <span style="color:var(--neg);">●</span>`:''}</p><p class="tx-cat">${escapeHtml(t.lastBody.slice(0,44))}${t.lastBody.length>44?'…':''}</p></div>
+          <div class="tx-date">${t.lastDate.toLocaleDateString('fr-FR')}</div>
+        </div>`).join('')}
+  </div>`;
+}
+function markThreadRead(thread){
+  if(thread.unread===0) return;
+  thread.unread=0;
+  sb.from('support_messages').update({read_by_admin:true}).eq('account_number',thread.accountNumber).eq('sender','user');
+}
+async function sendAdminMessage(accountNumber){
+  const input = document.getElementById('msg-input');
+  const body = input.value.trim();
+  if(!body) return;
+  input.value='';
+  const thread = ALL_MESSAGE_THREADS.find(t=>t.accountNumber===accountNumber);
+  const msg = {id:genId('MSG'), sender:'admin', body, date:new Date()};
+  if(thread) thread.messages.push(msg);
+  renderRoot();
+  await sb.from('support_messages').insert({id:msg.id, account_number:accountNumber, sender:'admin', body, read_by_user:false, read_by_admin:true});
+}
 /* =========================================================
    PROFIL
 ========================================================= */
@@ -1900,11 +2130,9 @@ function renderProfil(){
   <div class="settings-group">
     <p class="settings-label">Sécurité</p>
     <div class="settings-item"><div class="sic">${icon('lock',16)}</div><div class="stx">Code PIN<small>Utilisé pour révéler les infos de carte</small></div>${icon('chevronR',16)}</div>
-    <div class="settings-item"><div class="sic">${icon('shield',16)}</div><div class="stx">Biométrie<small>Empreinte / Face ID</small></div><button class="toggle ${sec.bio?'on':''}" onclick="toggleSec('bio')"></button></div>
   </div>
   <div class="settings-group">
     <p class="settings-label">Préférences</p>
-    <div class="settings-item"><div class="sic">${icon('bell',16)}</div><div class="stx">Notifications<small>Alertes et rappels</small></div><button class="toggle ${sec.notif?'on':''}" onclick="toggleSec('notif')"></button></div>
     <div class="settings-item"><div class="sic">${icon('gear',16)}</div><div class="stx">Mode sombre<small>Adapter l'affichage</small></div><button class="toggle ${state.dark?'on':''}" onclick="toggleDark()"></button></div>
     <div class="settings-item" style="cursor:pointer;" onclick="startTour(TOUR_INDEX,'huma_index_tour_seen')"><div class="sic">${icon('shield',16)}</div><div class="stx">Revoir le tour guidé<small>Bulles explicatives dans l'application</small></div>${icon('chevronR',16)}</div>
   </div>
@@ -1920,7 +2148,6 @@ function renderProfil(){
   <button class="logout-btn" onclick="logout()">${icon('back',16)} Déconnexion</button>
   `;
 }
-const sec={bio:true,notif:true};
 /* ============================================================
    TOUR GUIDÉ — bulles avec flèches pointant les vrais éléments
 ============================================================ */
@@ -1947,8 +2174,6 @@ const TOUR_INDEX = [
   {selector:".list-card", placement:'top', titre:'Dépenses par catégorie', texte:"Le détail de vos dépenses réparties par catégorie (Cafétéria, Carte, etc.)."},
   /* PROFIL */
   {before:()=>goProfile(), selector:"[onclick=\"toggleAccNum ? toggleAccNum() : null\"], .settings-group", placement:'bottom', titre:'Vos informations', texte:"Votre numéro de compte et votre rôle dans l'établissement."},
-  {selector:"[onclick=\"toggleSec('bio')\"]", placement:'top', titre:'Code PIN & Biométrie', texte:"Sécurisez l'accès aux informations sensibles avec un code PIN ou votre empreinte/Face ID."},
-  {selector:"[onclick=\"toggleSec('notif')\"]", placement:'top', titre:'Notifications', texte:"Activez ou désactivez les alertes et rappels de l'application."},
   {selector:"[onclick=\"toggleDark()\"]", placement:'top', titre:'Mode sombre', texte:"Adaptez l'affichage à vos préférences visuelles."},
   {selector:".logout-btn", placement:'top', titre:'Déconnexion', texte:"Terminé ! Vous pouvez vous déconnecter en toute sécurité depuis ce bouton."},
 ];
@@ -2022,7 +2247,6 @@ function renderAbonnement(){
   <button class="btn-secondary" onclick="state.screen='paiements';renderRoot()">Retour aux paiements</button>
   `;
 }
-function toggleSec(k){ sec[k]=!sec[k]; renderRoot(); }
 function renderInstallIOS(){
   return `
   <div class="section-title" style="margin-top:16px;">Installer HUMA BANK</div>
@@ -2100,11 +2324,12 @@ function renderAdminDemandes(){
     ${rows.length===0?`<div class="empty-state" style="padding:30px;"><p>Aucune demande.</p></div>`:
     rows.map(r=>`
       <div class="trow" style="flex-wrap:wrap;">
-        <div class="tleft"><b>${r.name} — ${r.kind}${r.method?' ('+r.method+')':''}</b><small>${r.accountNumber} · ${r.id} · ${r.date.toLocaleString('fr-FR')}</small></div>
+        <div class="tleft"><b>${r.name} — ${r.kind}${r.method?' ('+r.method+')':''}</b><small>${r.accountNumber} · ${r.id} · ${r.date.toLocaleString('fr-FR')}${r.ref&&r.ref!=='—'?' · N° transaction : '+r.ref:''}</small></div>
         <div style="text-align:right;">
           <div style="font-weight:700;font-size:13px;" class="tnum">${money(r.amount)}</div>
           <span class="badge ${r.status==='pending'?'pending':r.status==='approved'?'ok':'fail'}">${r.status==='pending'?'En attente':r.status==='approved'?'Approuvé':'Refusé'}</span>
         </div>
+        ${r.proofUrl?`<a href="${r.proofUrl}" target="_blank" rel="noopener" style="width:100%;margin-top:8px;font-size:12px;color:var(--navy-700);text-decoration:underline;">${icon('receipt',13)} Voir la capture d'écran de la transaction</a>`:''}
         ${r.status==='pending'?`
         <div style="display:flex;gap:8px;width:100%;margin-top:10px;">
           <button class="act-btn primary" style="flex:1;" onclick="handleRequest('${r.kind}','${r.id}',true)">Approuver</button>

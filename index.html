@@ -492,6 +492,16 @@ input[type=range]{width:100%;accent-color:var(--navy-700);}
 .dark .tour-next-btn{color:#8FA6F5;}
 .tour-arrow{position:absolute;width:13px;height:13px;background:var(--surface);transform:rotate(45deg);}
 
+/* CADENAS — animation pour statut fermé */
+.login-item-locked{opacity:.78;}
+.lock-anim{position:relative;width:80px;height:88px;margin:10px auto 0;}
+.lock-shackle{position:absolute;top:0;left:20px;width:40px;height:36px;border:6px solid #fff;border-bottom:none;border-radius:20px 20px 0 0;animation:shackleClose 1.4s ease-in-out infinite;transform-origin:20px 36px;}
+.lock-body{position:absolute;bottom:0;left:8px;width:64px;height:52px;background:#fff;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--navy-900);box-shadow:0 10px 24px -8px rgba(0,0,0,.4);}
+@keyframes shackleClose{
+  0%,100%{transform:rotate(0deg);}
+  50%{transform:rotate(-14deg) translateX(-4px);}
+}
+
 @media (min-width:760px){
   body{background:var(--navy-50);align-items:stretch;}
   .phone{max-width:100%;width:100%;min-height:100vh;flex-direction:row;box-shadow:none;background:var(--navy-50);}
@@ -787,12 +797,12 @@ function user(){ return ACCOUNTS[state.session]; }
 const auth = { view:'role', role:null, form:{}, createdNumber:null, showCode:false, loginNumber:'', loginPass:'', loginErr:'', parentCode:'', parentCodeErr:'', parentPending:null, parentCountdown:100 };
 
 const ROLES = [
-  {id:'personnel', label:'Membres du personnel'},
   {id:'direction', label:'Membres de la direction'},
   {id:'professeur', label:'Professeur'},
   {id:'parent', label:'Parents'},
   {id:'eleve', label:'Élèves'},
 ];
+const LOCKED_ROLES = ['eleve','parent'];
 
 function renderAuth(){
   if(auth.view==='role') return renderAuthRole();
@@ -812,9 +822,9 @@ function renderAuthRole(){
     <p class="login-sub">Sélectionnez votre profil pour créer votre compte.</p>
     <div class="login-list">
       ${ROLES.map(r=>`
-        <button class="login-item" onclick="pickRole('${r.id}')">
-          <div class="login-avatar" style="background:${colorFor(r.id)}">${icon('user',18)}</div>
-          <div><div class="li-name">${r.label}</div></div>
+        <button class="login-item ${LOCKED_ROLES.includes(r.id)?'login-item-locked':''}" onclick="pickRole('${r.id}')">
+          <div class="login-avatar" style="background:${colorFor(r.id)}">${icon(LOCKED_ROLES.includes(r.id)?'lock':'user',18)}</div>
+          <div><div class="li-name">${r.label}</div>${LOCKED_ROLES.includes(r.id)?`<div class="li-role">Fermé jusqu'à nouvel ordre</div>`:''}</div>
           <div class="chev">${icon('chevronR',18)}</div>
         </button>`).join('')}
     </div>
@@ -823,9 +833,19 @@ function renderAuthRole(){
   </div>`;
 }
 function pickRole(id){
+  if(LOCKED_ROLES.includes(id)){ auth.view='role-locked'; auth.lockedRoleLabel=(ROLES.find(x=>x.id===id)||{}).label; renderRoot(); return; }
   auth.role=id; auth.form={genre:'H'};
   if(id==='parent'){ auth.view='parent-info'; renderRoot(); return; }
   auth.view='form'; renderRoot();
+}
+function renderRoleLocked(){
+  return `
+  <div class="login-wrap" style="align-items:center;text-align:center;">
+    <div class="lock-anim"><div class="lock-shackle"></div><div class="lock-body">${icon('lock',26)}</div></div>
+    <h1 class="login-hero" style="font-size:20px;margin-top:22px;">${auth.lockedRoleLabel}</h1>
+    <p class="login-sub">Ce statut est fermé jusqu'à nouvel ordre par la direction de l'établissement. Les comptes déjà créés restent enregistrés en toute sécurité.</p>
+    <button class="btn-secondary" style="margin-top:10px;" onclick="auth.view='role';renderRoot()">Retour</button>
+  </div>`;
 }
 
 function renderAuthForm(){
@@ -1073,10 +1093,20 @@ function logout(){
    SHELL
 ========================================================= */
 function isAdmin(u){ return u.role==='direction'; }
-function roleLabel(role){ return {eleve:'Élève',parent:'Parent',professeur:'Professeur',personnel:'Membre du personnel',direction:'Direction'}[role]||role; }
+function roleLabel(role){ return {eleve:'Élève',parent:'Parent',professeur:'Professeur',direction:'Direction'}[role]||role; }
 
+function renderAccountLocked(u){
+  return `
+  <div class="phone" style="align-items:center;justify-content:center;text-align:center;padding:30px 26px;background:radial-gradient(120% 100% at 50% 0%,var(--navy-700) 0%,var(--navy-900) 55%,var(--navy-950) 100%);color:#fff;">
+    <div class="lock-anim"><div class="lock-shackle"></div><div class="lock-body">${icon('lock',26)}</div></div>
+    <h1 class="login-hero" style="font-size:20px;margin-top:24px;color:#fff;">Compte fermé jusqu'à nouvel ordre</h1>
+    <p class="login-sub" style="color:#B9C6EE;">Bonjour ${u.prenom}, votre accès est temporairement suspendu par la direction de l'établissement. Toutes vos données (solde, transactions, cartes) restent enregistrées en toute sécurité et seront de nouveau accessibles à la réouverture.</p>
+    <button class="btn-secondary" style="margin-top:18px;max-width:320px;" onclick="logout()">Se déconnecter</button>
+  </div>`;
+}
 function renderShell(){
   const u = user();
+  if(LOCKED_ROLES.includes(u.role)) return renderAccountLocked(u);
   const admin = isAdmin(u);
   const unread = (u.notifications||[]).filter(n=>!n.read).length;
   const navItems = admin
@@ -1948,7 +1978,7 @@ function renderAdminDashboard(){
   const pendingW = WITHDRAW_REQUESTS.filter(r=>r.status==='pending').length;
   const totalBalance = accs.reduce((a,b)=>a+b.balance,0);
   const suspended = accs.filter(a=>a.status==='suspended').length;
-  const roleData = [['eleve','Élèves'],['professeur','Professeurs'],['personnel','Personnel'],['direction','Direction']];
+  const roleData = [['eleve','Élèves'],['professeur','Professeurs'],['parent','Parents'],['direction','Direction']];
   return `
   <div class="section-title" style="margin-top:16px;">Vue d'ensemble — HUMA BANK</div>
   <div class="kpi-grid">
@@ -2067,8 +2097,8 @@ async function handleRequest(kind,id,approve){
 let acctFilter = 'Tous';
 function renderAdminComptes(){
   const accs = allAccounts().filter(a=>a.role!=='direction');
-  const filters = ['Tous','Élèves','Professeurs','Personnel'];
-  const map = {'Élèves':'eleve','Professeurs':'professeur','Personnel':'personnel'};
+  const filters = ['Tous','Élèves','Professeurs','Parents'];
+  const map = {'Élèves':'eleve','Professeurs':'professeur','Parents':'parent'};
   const shown = acctFilter==='Tous' ? accs : accs.filter(a=>a.role===map[acctFilter]);
   return `
   <div class="section-title" style="margin-top:16px;">Rechercher un compte</div>
@@ -2302,7 +2332,7 @@ function drawCharts(){
   drawLineFlux('mini-chart', state.displaySeries, fluxColor(), fluxFill());
   drawLineFlux('finance-chart', state.displaySeries, fluxColor(), fluxFill());
   drawLineFlux('admin-chart', state.displaySeries, fluxColor(), fluxFill());
-  drawDoughnutChart('role-chart', [roleCount('eleve'),roleCount('professeur'),roleCount('personnel'),roleCount('direction')], ['#0C2350','#2748A0','#3E5FC4','#8FA6F5']);
+  drawDoughnutChart('role-chart', [roleCount('eleve'),roleCount('professeur'),roleCount('parent'),roleCount('direction')], ['#0C2350','#2748A0','#3E5FC4','#8FA6F5']);
 }
 function ensureTicker(){
   if(financeTimer) return;
@@ -2335,6 +2365,7 @@ function renderRoot(){
 function renderAuthOrParent(){
   if(auth.view==='parent-info') return renderParentInfo();
   if(auth.view==='parent-password') return renderParentPassword();
+  if(auth.view==='role-locked') return renderRoleLocked();
   return renderAuth();
 }
 

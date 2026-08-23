@@ -2,8 +2,19 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
-<title>ÉcoleBank — Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>HUMA BANK</title>
+
+<!-- PWA — comportement app installée, aucune barre de navigateur -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0C2350">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- iOS : mode plein écran une fois ajouté à l'écran d'accueil -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HUMA BANK">
+<link rel="apple-touch-icon" href="/icon-192.png">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -405,6 +416,15 @@ input[type=range]{width:100%;accent-color:var(--navy-700);}
 .huma-loader-wrap{text-align:center;padding:34px 10px;}
 .huma-loader-wrap p{color:var(--muted);font-size:13.5px;margin:0;font-weight:600;}
 
+/* GUIDE INSTALLATION iOS */
+.ios-install-step{display:flex;align-items:flex-start;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px;}
+.ios-install-step .ios-step-num{width:26px;height:26px;border-radius:50%;background:var(--navy-800);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;flex-shrink:0;}
+.ios-install-step p{margin:0;font-size:13.5px;line-height:1.5;padding-top:2px;}
+.ios-pointer-wrap{text-align:center;margin:24px 0;}
+.ios-pointer{width:52px;height:52px;border-radius:50%;background:var(--navy-800);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;animation:iosBounce 1.3s ease-in-out infinite;}
+.ios-pointer-wrap p{color:var(--muted);font-size:12px;margin:0;}
+@keyframes iosBounce{0%,100%{transform:translateY(0);}50%{transform:translateY(8px);}}
+
 /* CARD — realistic normal size */
 .bank-card{max-width:360px;margin:0 auto;aspect-ratio:1.586;}
 .card-wrap{max-width:360px;margin:0 auto;}
@@ -802,7 +822,7 @@ function startRealtime(){
 const state = {
   session:null, // account number of logged-in user
   screen:'accueil', adminScreen:'dashboard',
-  showBalance:true, dark:false, notifOpen:false, showAccNum:false,
+  showBalance:true, dark:false, notifOpen:false, showAccNum:false, canInstall:false,
   reveal:{}, financeSeries:[62,58,66,70,64,72,78,75,80,77], displaySeries:[62,58,66,70,64,72,78,75,80,77],
 };
 let charts = {};
@@ -1228,6 +1248,7 @@ function renderScreen(){
     case 'finances': return renderFinances();
     case 'profil': return renderProfil();
     case 'abonnement': return renderAbonnement();
+    case 'installios': return renderInstallIOS();
     default: return renderAccueil();
   }
 }
@@ -1886,6 +1907,15 @@ function renderProfil(){
     <div class="settings-item"><div class="sic">${icon('gear',16)}</div><div class="stx">Mode sombre<small>Adapter l'affichage</small></div><button class="toggle ${state.dark?'on':''}" onclick="toggleDark()"></button></div>
     <div class="settings-item" style="cursor:pointer;" onclick="startTour(TOUR_INDEX,'huma_index_tour_seen')"><div class="sic">${icon('shield',16)}</div><div class="stx">Revoir le tour guidé<small>Bulles explicatives dans l'application</small></div>${icon('chevronR',16)}</div>
   </div>
+  ${!isStandalone() ? `
+  <div class="settings-group">
+    <p class="settings-label">Application</p>
+    ${state.canInstall ? `
+    <div class="settings-item" style="cursor:pointer;" onclick="installApp()"><div class="sic">${icon('wallet',16)}</div><div class="stx">Installer HUMA BANK<small>Icône plein écran sur votre appareil</small></div>${icon('chevronR',16)}</div>
+    ` : isIOS() ? `
+    <div class="settings-item" style="cursor:pointer;" onclick="state.screen='installios';renderRoot()"><div class="sic">${icon('wallet',16)}</div><div class="stx">Installer HUMA BANK<small>Ajouter à l'écran d'accueil</small></div>${icon('chevronR',16)}</div>
+    ` : ''}
+  </div>` : ''}
   <button class="logout-btn" onclick="logout()">${icon('back',16)} Déconnexion</button>
   `;
 }
@@ -1992,6 +2022,29 @@ function renderAbonnement(){
   `;
 }
 function toggleSec(k){ sec[k]=!sec[k]; renderRoot(); }
+function renderInstallIOS(){
+  return `
+  <div class="section-title" style="margin-top:16px;">Installer HUMA BANK</div>
+  <p style="color:var(--muted);font-size:12.5px;margin:-8px 0 20px;">Sur iPhone, Apple exige que ce geste soit fait manuellement une seule fois — après ça, l'app s'ouvrira toujours en plein écran, avec sa propre icône, comme une vraie application.</p>
+  <div class="ios-install-step">
+    <div class="ios-step-num">1</div>
+    <p>Touchez le bouton <b>Partager</b> ${iosShareIcon()} tout en bas de Safari</p>
+  </div>
+  <div class="ios-install-step">
+    <div class="ios-step-num">2</div>
+    <p>Faites défiler et touchez <b>« Sur l'écran d'accueil »</b></p>
+  </div>
+  <div class="ios-install-step">
+    <div class="ios-step-num">3</div>
+    <p>Touchez <b>Ajouter</b> en haut à droite</p>
+  </div>
+  <div class="ios-pointer-wrap"><div class="ios-pointer">${iosShareIcon(22)}</div><p>C'est ce bouton, en bas de l'écran</p></div>
+  <button class="btn-secondary" onclick="state.screen='profil';renderRoot()">Retour</button>
+  `;
+}
+function iosShareIcon(size=16){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:-3px;"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>`;
+}
 function toggleAccNum(){ state.showAccNum=!state.showAccNum; renderRoot(); }
 function toggleDark(){ state.dark=!state.dark; document.body.classList.toggle('dark',state.dark); renderRoot(); }
 
@@ -2400,6 +2453,33 @@ function renderAuthOrParent(){
 async function boot(){
   renderRoot();
 }
+/* ============================================================
+   PWA — service worker + installation native (Android/Chrome)
+============================================================ */
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  state.canInstall = true;
+  renderRoot();
+});
+window.addEventListener('appinstalled', ()=>{
+  deferredInstallPrompt = null; state.canInstall = false; renderRoot();
+});
+async function installApp(){
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null; state.canInstall = false; renderRoot();
+}
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('/sw.js').catch(()=>{}); });
+}
+function isStandalone(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true;
+}
+function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; }
+
 window.addEventListener('load', ()=>{
   boot();
   // Le tracé des lettres dure ~2,5s (8 lettres × .17s + .9s), puis remplissage
